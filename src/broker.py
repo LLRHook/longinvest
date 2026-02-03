@@ -17,8 +17,15 @@ class Position:
     qty: Decimal
     market_value: float
     avg_entry_price: float
+    current_price: float
+    lastday_price: float
+    # Total unrealized P/L (from entry price)
     unrealized_pl: float
     unrealized_plpc: float
+    # Intraday P/L (today only)
+    change_today: float  # Stock's daily % change
+    unrealized_intraday_pl: float
+    unrealized_intraday_plpc: float
 
 
 @dataclass
@@ -26,6 +33,7 @@ class AccountStatus:
     cash: float
     portfolio_value: float
     buying_power: float
+    last_equity: float  # Yesterday's closing portfolio value
     positions: list[Position]
 
 
@@ -48,14 +56,20 @@ class AlpacaBroker:
             cash=float(account.cash),
             portfolio_value=float(account.portfolio_value),
             buying_power=float(account.buying_power),
+            last_equity=float(account.last_equity),
             positions=[
                 Position(
                     symbol=p.symbol,
                     qty=p.qty,
                     market_value=float(p.market_value),
                     avg_entry_price=float(p.avg_entry_price),
+                    current_price=float(p.current_price) if p.current_price else 0.0,
+                    lastday_price=float(p.lastday_price) if p.lastday_price else 0.0,
                     unrealized_pl=float(p.unrealized_pl),
                     unrealized_plpc=float(p.unrealized_plpc),
+                    change_today=float(p.change_today) if p.change_today else 0.0,
+                    unrealized_intraday_pl=float(p.unrealized_intraday_pl) if p.unrealized_intraday_pl else 0.0,
+                    unrealized_intraday_plpc=float(p.unrealized_intraday_plpc) if p.unrealized_intraday_plpc else 0.0,
                 )
                 for p in positions
             ],

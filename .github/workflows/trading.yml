@@ -1,0 +1,92 @@
+name: Trading Bot
+
+on:
+  schedule:
+    # Market open: 9:30 AM ET
+    # Winter (Nov-Mar): ET = UTC-5, so 9:30 AM ET = 14:30 UTC
+    # Summer (Mar-Nov): ET = UTC-4, so 9:30 AM ET = 13:30 UTC
+    # Using 14:30 UTC (winter time) - adjust in March/November
+    - cron: '30 14 * * 1-5'
+
+    # Daily report: 4:30 PM ET
+    # Winter: 4:30 PM ET = 21:30 UTC
+    # Summer: 4:30 PM ET = 20:30 UTC
+    # Using 21:30 UTC (winter time) - adjust in March/November
+    - cron: '30 21 * * 1-5'
+
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to run'
+        required: true
+        default: 'report'
+        type: choice
+        options:
+          - report
+          - dry-run
+          - execute
+          - status
+
+env:
+  ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+  ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+  FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+  DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+  ENABLE_NOTIFICATIONS: 'true'
+
+jobs:
+  trading-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Determine action based on schedule
+        id: determine-action
+        run: |
+          # If manually triggered, use the input
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "action=${{ inputs.action }}" >> $GITHUB_OUTPUT
+            echo "Manual trigger: ${{ inputs.action }}"
+            exit 0
+          fi
+
+          # For scheduled runs, determine based on UTC hour
+          HOUR=$(date -u +%H)
+          echo "Current UTC hour: $HOUR"
+
+          # Morning run (13-15 UTC) = market open = execute trades
+          # Evening run (20-22 UTC) = market close = daily report
+          if [ "$HOUR" -ge 13 ] && [ "$HOUR" -le 15 ]; then
+            echo "action=dry-run" >> $GITHUB_OUTPUT
+            echo "Scheduled: Market open - running dry-run (change to 'execute' for live trading)"
+          else
+            echo "action=report" >> $GITHUB_OUTPUT
+            echo "Scheduled: Market close - sending daily report"
+          fi
+
+      - name: Run status check
+        if: steps.determine-action.outputs.action == 'status'
+        run: python main.py --status
+
+      - name: Run dry-run (no trades)
+        if: steps.determine-action.outputs.action == 'dry-run'
+        run: python main.py --dry-run
+
+      - name: Execute trades (LIVE)
+        if: steps.determine-action.outputs.action == 'execute'
+        run: python main.py
+
+      - name: Send daily report
+        if: steps.determine-action.outputs.action == 'report'
+        run: python main.py --report

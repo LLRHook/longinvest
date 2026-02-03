@@ -17,7 +17,9 @@ from src.cache import (
     symbols_hash,
 )
 from src.data import FMPClient
+from src.notifier import format_performance_embed, send_discord_notification
 from src.optimizer import compute_individual_stats, optimize_allocations
+from src.reporter import format_console_report, generate_daily_report
 from src.strategy import GrowthStrategy
 
 logging.basicConfig(
@@ -32,6 +34,48 @@ def cmd_clear_cache() -> int:
     cache = CacheManager()
     deleted = cache.clear()
     print(f"Cleared {deleted} cache files.")
+    return 0
+
+
+def cmd_report(dry_run: bool = False) -> int:
+    """Generate and send daily performance report."""
+    print("\n=== Generating Daily Report ===")
+
+    broker = AlpacaBroker()
+    fmp = FMPClient()
+
+    report = generate_daily_report(broker=broker, fmp=fmp)
+
+    # Always show console output
+    print(format_console_report(report))
+
+    if dry_run:
+        print("[DRY RUN - Discord notification not sent]")
+        print("\nDiscord embed preview:")
+        embed = format_performance_embed(report)
+        # Strip emojis for console display (Windows compatibility)
+        title = embed['title'].encode('ascii', 'ignore').decode('ascii').strip()
+        desc = embed['description'].encode('ascii', 'ignore').decode('ascii')
+        print(f"  Title: {title}")
+        print(f"  Color: {'Green' if embed['color'] == 0x00FF00 else 'Red'}")
+        print(f"  Description:\n    {desc.replace(chr(10), chr(10) + '    ')}")
+        return 0
+
+    # Send Discord notification
+    if Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:
+        embed = format_performance_embed(report)
+        success = send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
+        if success:
+            print("Discord notification sent.")
+        else:
+            print("Failed to send Discord notification.")
+            return 1
+    elif not Config.DISCORD_WEBHOOK_URL:
+        print("Discord webhook URL not configured. Set DISCORD_WEBHOOK_URL in .env")
+    elif not Config.ENABLE_NOTIFICATIONS:
+        print("Notifications disabled. Set ENABLE_NOTIFICATIONS=true in .env")
+
+    print(f"\nTotal API calls: {fmp.get_api_call_count()}")
     return 0
 
 
@@ -324,6 +368,11 @@ def main() -> int:
         help="Full cycle without executing trades",
     )
     parser.add_argument(
+        "--report",
+        action="store_true",
+        help="Generate and send daily performance report",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging",
@@ -351,16 +400,19 @@ def main() -> int:
     # Validate configuration
     missing = Config.validate()
     if missing:
-        # Allow --status and --screen to show config status even without keys
-        if not (args.status or args.screen or args.dry_run):
+        # Allow certain commands with partial config
+        if not (args.status or args.screen or args.dry_run or args.report):
             print(f"Error: Missing required configuration: {', '.join(missing)}")
             print("Copy .env.example to .env and fill in your API keys.")
             return 1
         elif args.status and "ALPACA_API_KEY" in missing:
-            print(f"Error: Alpaca keys required for --status")
+            print("Error: Alpaca keys required for --status")
             return 1
         elif args.screen and "FMP_API_KEY" in missing:
-            print(f"Error: FMP key required for --screen")
+            print("Error: FMP key required for --screen")
+            return 1
+        elif args.report and ("ALPACA_API_KEY" in missing or "FMP_API_KEY" in missing):
+            print("Error: Alpaca and FMP keys required for --report")
             return 1
 
     try:
@@ -368,8 +420,10 @@ def main() -> int:
             return cmd_status()
         elif args.screen:
             return cmd_screen(force_refresh=args.force_refresh)
-        elif args.dry_run:
+        elif args.dry_run and not args.report:
             return cmd_dry_run(force_refresh=args.force_refresh)
+        elif args.report:
+            return cmd_report(dry_run=args.dry_run)
         else:
             return cmd_execute(force_refresh=args.force_refresh)
     except Exception as e:

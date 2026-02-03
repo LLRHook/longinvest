@@ -10,6 +10,10 @@ class Config:
     ALPACA_SECRET_KEY: str = os.getenv("ALPACA_SECRET_KEY", "")
     ALPACA_PAPER: bool = True
 
+    # Discord Notifications
+    DISCORD_WEBHOOK_URL: str = os.getenv("DISCORD_WEBHOOK_URL", "")
+    ENABLE_NOTIFICATIONS: bool = os.getenv("ENABLE_NOTIFICATIONS", "true").lower() == "true"
+
     # FMP
     FMP_API_KEY: str = os.getenv("FMP_API_KEY", "")
     FMP_BASE_URL: str = "https://financialmodelingprep.com/stable"
