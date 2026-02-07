@@ -131,7 +131,7 @@ class FMPClient:
         self,
         min_market_cap: float = 300e6,
         max_market_cap: float | None = None,
-        limit: int = 500,
+        limit: int = 2000,
     ) -> list[dict[str, Any]]:
         """Get US stock universe from FMP company screener.
 
