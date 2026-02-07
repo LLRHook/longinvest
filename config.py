@@ -20,10 +20,8 @@ class Config:
     FMP_RATE_LIMIT_MS: int = 200  # Starter tier: 300 calls/min
 
     # Strategy
-    MAX_POSITIONS: int = 10
     MIN_MARKET_CAP: float = 300_000_000  # $300M (small cap)
     MAX_MARKET_CAP: float = 2_000_000_000  # $2B (small cap ceiling)
-    MAX_FUNDAMENTAL_ANALYSIS: int = 100
 
     # Portfolio Optimization
     INVESTMENT_BUDGET: float = 5000.0

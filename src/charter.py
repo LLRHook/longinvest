@@ -77,6 +77,7 @@ def calculate_cumulative_returns(
     # Normalize both indices to date-only for joining
     portfolio_df = portfolio_df.copy()
     portfolio_df.index = portfolio_df.index.normalize()
+    portfolio_df.index = portfolio_df.index.tz_localize(None)
 
     benchmark_df = benchmark_df.copy()
     benchmark_df.index = benchmark_df.index.normalize()
@@ -125,8 +126,13 @@ def generate_performance_chart(perf_data: pd.DataFrame) -> BytesIO:
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
 
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    num_days = (perf_data.index[-1] - perf_data.index[0]).days
+    if num_days < 30:
+        ax.xaxis.set_major_locator(mdates.DayLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+    else:
+        ax.xaxis.set_major_locator(mdates.MonthLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
     fig.autofmt_xdate()
 
     fig.tight_layout()

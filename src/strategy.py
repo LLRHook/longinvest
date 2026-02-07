@@ -140,9 +140,7 @@ class GrowthStrategy:
         candidates = [c for c in candidates if c["symbol"] not in existing]
         logger.info(f"After filtering existing positions: {len(candidates)} candidates")
 
-        # Limit fundamental analysis to top N by market cap (saves API calls)
-        candidates = candidates[:Config.MAX_FUNDAMENTAL_ANALYSIS]
-        logger.info(f"Analyzing top {len(candidates)} by market cap")
+        logger.info(f"Analyzing {len(candidates)} candidates")
 
         scored_stocks: list[ScoredStock] = []
 
@@ -218,20 +216,11 @@ class GrowthStrategy:
         existing_symbols: set[str] | None = None,
         max_picks: int | None = None,
     ) -> list[ScoredStock]:
-        """Get top stocks to buy, respecting max positions."""
+        """Get top stocks to buy."""
         existing = existing_symbols or set()
-        current_count = len(existing)
-        slots_available = Config.MAX_POSITIONS - current_count
-
-        if slots_available <= 0:
-            logger.info(f"Already at max positions ({Config.MAX_POSITIONS})")
-            return []
-
-        picks = max_picks if max_picks else slots_available
-        picks = min(picks, slots_available)
 
         scored = self.screen(existing_symbols=existing)
-        recommendations = scored[:picks]
+        recommendations = scored[:max_picks] if max_picks else scored
 
         logger.info(f"Recommending {len(recommendations)} stocks for purchase")
         return recommendations

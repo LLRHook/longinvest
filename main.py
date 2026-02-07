@@ -2,6 +2,7 @@
 import argparse
 import logging
 import sys
+import time
 from datetime import datetime, timedelta
 
 from config import Config
@@ -20,6 +21,7 @@ from src.data import FMPClient
 from src.charter import generate_performance_chart_image
 from src.notifier import (
     format_performance_embed,
+    send_discord_chart_message,
     send_discord_notification,
     send_discord_notification_with_chart,
 )
@@ -63,33 +65,46 @@ def cmd_report(dry_run: bool = False) -> int:
         print("Chart generation skipped (not enough history).")
 
     if dry_run:
-        print("[DRY RUN - Discord notification not sent]")
-        print("\nDiscord embed preview:")
+        print("[DRY RUN - Discord notifications not sent]")
         embed = format_performance_embed(report)
         # Strip emojis for console display (Windows compatibility)
         title = embed['title'].encode('ascii', 'ignore').decode('ascii').strip()
         desc = embed['description'].encode('ascii', 'ignore').decode('ascii')
+        print("\nMessage 1 - Daily Summary:")
         print(f"  Title: {title}")
         print(f"  Color: {'Green' if embed['color'] == 0x00FF00 else 'Red'}")
         print(f"  Description:\n    {desc.replace(chr(10), chr(10) + '    ')}")
+        print("\nMessage 2 - Cumulative Growth Chart:")
         if chart_image:
             print("  Chart: [attached]")
+        else:
+            print("  Chart: [skipped - not enough history]")
         return 0
 
-    # Send Discord notification
+    # Send Discord notifications (two messages)
     if Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:
         embed = format_performance_embed(report)
-        if chart_image:
-            success = send_discord_notification_with_chart(
-                Config.DISCORD_WEBHOOK_URL, embed, chart_image
-            )
-        else:
-            success = send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
+
+        # Message 1: Daily summary embed
+        success = send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
         if success:
-            print("Discord notification sent.")
+            print("Discord message 1 (summary) sent.")
         else:
-            print("Failed to send Discord notification.")
+            print("Failed to send Discord summary.")
             return 1
+
+        # Message 2: Cumulative growth chart
+        if chart_image:
+            time.sleep(2)
+            chart_success = send_discord_chart_message(
+                Config.DISCORD_WEBHOOK_URL, chart_image
+            )
+            if chart_success:
+                print("Discord message 2 (chart) sent.")
+            else:
+                print("Failed to send Discord chart.")
+        else:
+            print("Chart skipped (not enough history).")
     elif not Config.DISCORD_WEBHOOK_URL:
         print("Discord webhook URL not configured. Set DISCORD_WEBHOOK_URL in .env")
     elif not Config.ENABLE_NOTIFICATIONS:
@@ -110,7 +125,7 @@ def cmd_status() -> int:
     print(f"Buying Power: ${status.buying_power:,.2f}")
 
     if status.positions:
-        print(f"\n=== Positions ({len(status.positions)}/{Config.MAX_POSITIONS}) ===")
+        print(f"\n=== Positions ({len(status.positions)}) ===")
         for p in status.positions:
             pl_sign = "+" if p.unrealized_pl >= 0 else ""
             print(
@@ -161,7 +176,7 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
     print("\n=== Dry Run Mode ===")
     if force_refresh:
         print("(forcing fresh data)")
-    print(f"Current positions: {len(held_symbols)}/{Config.MAX_POSITIONS}")
+    print(f"Current positions: {len(held_symbols)}")
     print(f"Investment budget: ${Config.INVESTMENT_BUDGET:,.2f}")
 
     # Step 1: Fundamental screening (uses cache)
@@ -275,7 +290,7 @@ def cmd_execute(force_refresh: bool = False) -> int:
     print("\n=== Executing Trading Cycle ===")
     if force_refresh:
         print("(forcing fresh data)")
-    print(f"Current positions: {len(held_symbols)}/{Config.MAX_POSITIONS}")
+    print(f"Current positions: {len(held_symbols)}")
     print(f"Investment budget: ${Config.INVESTMENT_BUDGET:,.2f}")
 
     # Step 1: Fundamental screening (uses cache)
