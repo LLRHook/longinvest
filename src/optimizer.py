@@ -127,14 +127,49 @@ def apply_minimum_threshold(allocs: np.ndarray, threshold: float) -> np.ndarray:
     return allocs
 
 
+def _apply_position_cap(allocs: np.ndarray, max_pct: float) -> np.ndarray:
+    """Clamp each allocation to max_pct, redistribute excess proportionally."""
+    capped = np.minimum(allocs, max_pct)
+    excess = allocs.sum() - capped.sum()
+
+    if excess < 1e-6:
+        return capped
+
+    # Redistribute excess to uncapped positions
+    uncapped_mask = capped < max_pct
+    uncapped_total = capped[uncapped_mask].sum()
+
+    if uncapped_total > 0:
+        redistribution = excess * (capped[uncapped_mask] / uncapped_total)
+        capped[uncapped_mask] += redistribution
+
+    # Re-normalize
+    total = capped.sum()
+    if total > 0:
+        capped = capped / total
+
+    # Iteratively cap again if redistribution caused new breaches
+    if np.any(capped > max_pct + 1e-6):
+        return _apply_position_cap(capped, max_pct)
+
+    return capped
+
+
 def optimize_allocations(
-    prices_df: pd.DataFrame, min_allocation: float = 0.05
+    prices_df: pd.DataFrame,
+    min_allocation: float = 0.05,
+    max_position_pct: float | None = None,
+    sector_map: dict[str, str] | None = None,
+    max_sector_pct: float | None = None,
 ) -> OptimizationResult:
     """Optimize portfolio allocations to maximize Sharpe ratio.
 
     Args:
         prices_df: DataFrame with Date index, columns = symbols, values = prices
         min_allocation: Minimum allocation threshold (allocations below this are zeroed)
+        max_position_pct: Max allocation per single position (e.g. 0.15 for 15%)
+        sector_map: Optional mapping of symbol -> sector name
+        max_sector_pct: Max combined allocation per sector (e.g. 0.40 for 40%)
 
     Returns:
         OptimizationResult with allocations, Sharpe ratio, and other stats
@@ -165,8 +200,27 @@ def optimize_allocations(
 
     normed_prices = prices_df / prices_df.iloc[0]
     init_allocs = np.ones(n) / n
-    bounds = tuple((0.0, 1.0) for _ in range(n))
-    constraints = {"type": "eq", "fun": lambda x: np.sum(x) - 1.0}
+
+    # Per-position upper bound: min of 1.0 and max_position_pct
+    upper = max_position_pct if max_position_pct else 1.0
+    bounds = tuple((0.0, upper) for _ in range(n))
+
+    constraints = [{"type": "eq", "fun": lambda x: np.sum(x) - 1.0}]
+
+    # Sector diversification constraints
+    if sector_map and max_sector_pct:
+        sectors: dict[str, list[int]] = {}
+        for i, sym in enumerate(symbols):
+            sec = sector_map.get(sym, "Unknown")
+            sectors.setdefault(sec, []).append(i)
+
+        for sector_name, indices in sectors.items():
+            if len(indices) < n:  # Only constrain if it doesn't cover all stocks
+                idx = indices  # capture in closure
+                constraints.append({
+                    "type": "ineq",
+                    "fun": lambda x, _idx=idx: max_sector_pct - sum(x[i] for i in _idx),
+                })
 
     try:
         result = minimize(
@@ -189,6 +243,10 @@ def optimize_allocations(
         allocs = init_allocs
 
     allocs = apply_minimum_threshold(allocs, min_allocation)
+
+    # Apply position cap as post-processing safety net
+    if max_position_pct:
+        allocs = _apply_position_cap(allocs, max_position_pct)
 
     if allocs.sum() < 1e-6:
         logger.warning("All allocations below threshold. Using equal weights.")

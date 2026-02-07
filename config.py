@@ -29,6 +29,11 @@ class Config:
     MIN_ALLOCATION_THRESHOLD: float = 0.05  # 5%
     HISTORICAL_DAYS: int = 365
     MIN_HISTORICAL_DAYS: int = 200
+    MAX_SINGLE_POSITION_PCT: float = 0.15  # 15% max per stock
+    MAX_SECTOR_ALLOCATION: float = 0.40  # 40% max per sector
+
+    # Risk Management
+    TRAILING_STOP_PCT: float = 0.20  # 20% trailing stop
 
     # Caching
     CACHE_DIR: str = "cache"

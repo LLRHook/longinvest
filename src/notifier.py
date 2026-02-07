@@ -137,6 +137,52 @@ def send_discord_chart_message(
         return False
 
 
+def format_sell_embed(
+    symbol: str,
+    reason: str,
+    entry_price: float,
+    exit_price: float,
+    pl: float,
+    hold_days: int | None = None,
+) -> dict[str, Any]:
+    """Format a sell notification as a Discord embed.
+
+    Args:
+        symbol: Stock symbol sold
+        reason: Why the position was sold
+        entry_price: Average entry price
+        exit_price: Price at exit
+        pl: Realized P/L in dollars
+        hold_days: Days held (None if unknown)
+
+    Returns:
+        Discord embed dict
+    """
+    # Orange for stop-loss, red for fundamental degradation
+    is_stop = "stop" in reason.lower() or "trailing" in reason.lower()
+    color = 0xFF8C00 if is_stop else 0xFF4444
+
+    pl_sign = "+" if pl >= 0 else ""
+    pl_pct = ((exit_price / entry_price) - 1) if entry_price > 0 else 0
+    pct_sign = "+" if pl_pct >= 0 else ""
+
+    description_lines = [
+        f"**Symbol:** {symbol}",
+        f"**Reason:** {reason}",
+        f"**Entry:** ${entry_price:.2f} -> **Exit:** ${exit_price:.2f}",
+        f"**P/L:** {pl_sign}${pl:,.2f} ({pct_sign}{pl_pct:.2%})",
+    ]
+    if hold_days is not None:
+        description_lines.append(f"**Held:** {hold_days} days")
+
+    return {
+        "title": f"{'🛑' if is_stop else '🔴'} Position Sold - {symbol}",
+        "description": "\n".join(description_lines),
+        "color": color,
+        "footer": {"text": "Long-term Growth Bot"},
+    }
+
+
 def format_performance_embed(report_data: dict[str, Any]) -> dict[str, Any]:
     """Format report data into a Discord embed.
 
@@ -224,6 +270,32 @@ def format_performance_embed(report_data: dict[str, Any]) -> dict[str, Any]:
         fields.append({
             "name": f"📊 All Positions ({len(positions)})",
             "value": "\n".join(all_lines),
+            "inline": False,
+        })
+
+    # Risk metrics
+    risk = report_data.get("risk_metrics", {})
+    if risk:
+        risk_lines = []
+        risk_lines.append(f"Sharpe: **{risk.get('sharpe', 'N/A')}** | Sortino: **{risk.get('sortino', 'N/A')}**")
+        risk_lines.append(f"Max DD: **{risk.get('max_drawdown', 'N/A')}%** | Current DD: **{risk.get('current_drawdown', 'N/A')}%**")
+        risk_lines.append(f"Win Rate: **{risk.get('win_rate', 'N/A')}%**")
+        if "alpha" in risk and "beta" in risk:
+            alpha_sign = "+" if risk["alpha"] >= 0 else ""
+            risk_lines.append(f"Alpha: **{alpha_sign}{risk['alpha']}%** | Beta: **{risk['beta']}**")
+        fields.append({
+            "name": "📐 Risk Metrics",
+            "value": "\n".join(risk_lines),
+            "inline": False,
+        })
+
+    # Sector exposure
+    sector = report_data.get("sector_exposure", {})
+    if sector:
+        sector_lines = [f"`{name[:16]:16}` {pct}%" for name, pct in sector.items()]
+        fields.append({
+            "name": "🏭 Sector Exposure",
+            "value": "\n".join(sector_lines[:8]),
             "inline": False,
         })
 
