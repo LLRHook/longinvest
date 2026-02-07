@@ -47,60 +47,66 @@ class GrowthStrategy:
         return stocks
 
     def passes_guardrails(self, stock: StockData) -> tuple[bool, list[str]]:
-        """Check if stock passes basic quality guardrails."""
+        """Check if stock passes basic quality guardrails.
+
+        Intentionally lenient — scoring does the real ranking work.
+        These just eliminate clearly broken companies.
+        """
         failures = []
 
-        # P/E check: must be positive and reasonable
-        if stock.pe_ratio is not None:
-            if stock.pe_ratio <= 0:
-                failures.append(f"Negative P/E: {stock.pe_ratio:.1f}")
-            elif stock.pe_ratio > 100:
-                failures.append(f"P/E too high: {stock.pe_ratio:.1f}")
+        # Revenue growth must exist and be positive
+        if stock.revenue_growth is None or stock.revenue_growth <= 0:
+            growth_str = f"{stock.revenue_growth:.1%}" if stock.revenue_growth is not None else "N/A"
+            failures.append(f"No revenue growth: {growth_str}")
 
-        # D/E check: debt-to-equity should not be excessive
-        if stock.de_ratio is not None and stock.de_ratio > 2.0:
+        # Free cash flow must be positive (if data available)
+        if stock.free_cash_flow is not None and stock.free_cash_flow <= 0:
+            failures.append(f"Negative FCF: ${stock.free_cash_flow:,.0f}")
+
+        # D/E ratio must be < 1.5 (if data available)
+        if stock.de_ratio is not None and stock.de_ratio > 1.5:
             failures.append(f"High D/E: {stock.de_ratio:.2f}")
-
-        # Current ratio: should have adequate liquidity
-        if stock.current_ratio is not None and stock.current_ratio < 1.0:
-            failures.append(f"Low current ratio: {stock.current_ratio:.2f}")
 
         return len(failures) == 0, failures
 
     def score_stock(self, stock: StockData) -> ScoredStock:
-        """Score a stock based on growth metrics."""
+        """Score a stock based on small cap growth metrics. Max 100 points."""
         score = 0.0
         reasons = []
 
-        # Revenue growth (weight: 30)
+        # Revenue growth (35 pts) — top signal for small caps
         if stock.revenue_growth is not None and stock.revenue_growth > 0:
-            growth_score = min(stock.revenue_growth * 100, 30)
+            growth_score = min(stock.revenue_growth * 100, 35)
             score += growth_score
             reasons.append(f"Revenue growth: {stock.revenue_growth:.1%}")
 
-        # EPS growth (weight: 30)
-        if stock.eps_growth is not None and stock.eps_growth > 0:
-            eps_score = min(stock.eps_growth * 100, 30)
-            score += eps_score
-            reasons.append(f"EPS growth: {stock.eps_growth:.1%}")
+        # FCF margin (25 pts) — proves growth is sustainable
+        if stock.free_cash_flow is not None and stock.free_cash_flow > 0:
+            if stock.market_cap and stock.market_cap > 0:
+                fcf_yield = stock.free_cash_flow / stock.market_cap
+                fcf_score = min(fcf_yield * 500, 25)
+                score += fcf_score
+                reasons.append(f"FCF yield: {fcf_yield:.1%}")
+            else:
+                score += 15
+                reasons.append("FCF positive (yield N/A)")
 
-        # ROE (weight: 20)
+        # ROE (20 pts) — capital efficiency
         if stock.roe is not None and stock.roe > 0:
             roe_score = min(stock.roe * 100, 20)
             score += roe_score
             reasons.append(f"ROE: {stock.roe:.1%}")
 
-        # Gross margin (weight: 10)
+        # Gross margin (15 pts) — pricing power, scored above 30%
         if stock.gross_margin is not None and stock.gross_margin > 0.3:
-            margin_score = min((stock.gross_margin - 0.3) * 50, 10)
+            margin_score = min((stock.gross_margin - 0.3) * 75, 15)
             score += margin_score
             reasons.append(f"Gross margin: {stock.gross_margin:.1%}")
 
-        # Operating margin (weight: 10)
-        if stock.operating_margin is not None and stock.operating_margin > 0.1:
-            op_margin_score = min((stock.operating_margin - 0.1) * 50, 10)
-            score += op_margin_score
-            reasons.append(f"Operating margin: {stock.operating_margin:.1%}")
+        # FCF growth bonus (5 pts) — improving cash generation
+        if stock.free_cash_flow_growth is not None and stock.free_cash_flow_growth > 0.10:
+            score += 5
+            reasons.append(f"FCF growth: {stock.free_cash_flow_growth:.1%}")
 
         return ScoredStock(stock=stock, score=score, reasons=reasons)
 
