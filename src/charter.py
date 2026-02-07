@@ -101,7 +101,7 @@ def calculate_cumulative_returns(
 
 
 def generate_performance_chart(perf_data: pd.DataFrame) -> BytesIO:
-    """Generate a cumulative performance chart as PNG.
+    """Generate a cumulative performance chart with drawdown subplot as PNG.
 
     Args:
         perf_data: DataFrame with 'portfolio' and 'spy' columns (cumulative %).
@@ -109,30 +109,42 @@ def generate_performance_chart(perf_data: pd.DataFrame) -> BytesIO:
     Returns:
         BytesIO containing the PNG image.
     """
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, (ax_perf, ax_dd) = plt.subplots(
+        2, 1, figsize=(10, 7), height_ratios=[3, 1], sharex=True
+    )
 
-    ax.plot(
+    # Top subplot: cumulative returns
+    ax_perf.plot(
         perf_data.index, perf_data["portfolio"],
         color="#3B82F6", linewidth=2, label="Portfolio",
     )
-    ax.plot(
+    ax_perf.plot(
         perf_data.index, perf_data["spy"],
         color="#F97316", linewidth=1.5, linestyle="--", label="SPY",
     )
 
-    ax.axhline(y=0, color="gray", linewidth=0.5, linestyle="-")
-    ax.set_ylabel("Cumulative Return (%)")
-    ax.set_title("Portfolio vs SPY")
-    ax.legend(loc="upper left")
-    ax.grid(True, alpha=0.3)
+    ax_perf.axhline(y=0, color="gray", linewidth=0.5, linestyle="-")
+    ax_perf.set_ylabel("Cumulative Return (%)")
+    ax_perf.set_title("Portfolio vs SPY")
+    ax_perf.legend(loc="upper left")
+    ax_perf.grid(True, alpha=0.3)
+
+    # Bottom subplot: portfolio drawdown
+    cumulative = (1 + perf_data["portfolio"] / 100)
+    drawdown = (cumulative / cumulative.cummax() - 1) * 100
+    ax_dd.fill_between(perf_data.index, drawdown, 0, color="#EF4444", alpha=0.4)
+    ax_dd.plot(perf_data.index, drawdown, color="#EF4444", linewidth=1)
+    ax_dd.set_ylabel("Drawdown (%)")
+    ax_dd.set_ylim(top=0)
+    ax_dd.grid(True, alpha=0.3)
 
     num_days = (perf_data.index[-1] - perf_data.index[0]).days
     if num_days < 30:
-        ax.xaxis.set_major_locator(mdates.DayLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+        ax_dd.xaxis.set_major_locator(mdates.DayLocator())
+        ax_dd.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
     else:
-        ax.xaxis.set_major_locator(mdates.MonthLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+        ax_dd.xaxis.set_major_locator(mdates.MonthLocator())
+        ax_dd.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
     fig.autofmt_xdate()
 
     fig.tight_layout()

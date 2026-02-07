@@ -70,36 +70,46 @@ class GrowthStrategy:
         return len(failures) == 0, failures
 
     def score_stock(self, stock: StockData) -> ScoredStock:
-        """Score a stock based on small cap growth metrics. Max 100 points."""
+        """Score a stock based on small cap growth metrics. Max 100 points.
+
+        Scoring breakdown:
+            Revenue growth:        30 pts
+            FCF yield:             20 pts
+            ROE:                   15 pts
+            Gross margin:          10 pts
+            FCF growth bonus:       5 pts
+            Earnings momentum:     15 pts (EPS beats)
+            Earnings growth:        5 pts
+        """
         score = 0.0
         reasons = []
 
-        # Revenue growth (35 pts) — top signal for small caps
+        # Revenue growth (30 pts) — top signal for small caps
         if stock.revenue_growth is not None and stock.revenue_growth > 0:
-            growth_score = min(stock.revenue_growth * 100, 35)
+            growth_score = min(stock.revenue_growth * 100, 30)
             score += growth_score
             reasons.append(f"Revenue growth: {stock.revenue_growth:.1%}")
 
-        # FCF margin (25 pts) — proves growth is sustainable
+        # FCF yield (20 pts) — proves growth is sustainable
         if stock.free_cash_flow is not None and stock.free_cash_flow > 0:
             if stock.market_cap and stock.market_cap > 0:
                 fcf_yield = stock.free_cash_flow / stock.market_cap
-                fcf_score = min(fcf_yield * 500, 25)
+                fcf_score = min(fcf_yield * 400, 20)
                 score += fcf_score
                 reasons.append(f"FCF yield: {fcf_yield:.1%}")
             else:
-                score += 15
+                score += 12
                 reasons.append("FCF positive (yield N/A)")
 
-        # ROE (20 pts) — capital efficiency
+        # ROE (15 pts) — capital efficiency
         if stock.roe is not None and stock.roe > 0:
-            roe_score = min(stock.roe * 100, 20)
+            roe_score = min(stock.roe * 75, 15)
             score += roe_score
             reasons.append(f"ROE: {stock.roe:.1%}")
 
-        # Gross margin (15 pts) — pricing power, scored above 30%
+        # Gross margin (10 pts) — pricing power, scored above 30%
         if stock.gross_margin is not None and stock.gross_margin > 0.3:
-            margin_score = min((stock.gross_margin - 0.3) * 75, 15)
+            margin_score = min((stock.gross_margin - 0.3) * 50, 10)
             score += margin_score
             reasons.append(f"Gross margin: {stock.gross_margin:.1%}")
 
@@ -107,6 +117,21 @@ class GrowthStrategy:
         if stock.free_cash_flow_growth is not None and stock.free_cash_flow_growth > 0.10:
             score += 5
             reasons.append(f"FCF growth: {stock.free_cash_flow_growth:.1%}")
+
+        # Earnings momentum (15 pts) — EPS beat frequency
+        if stock.eps_beat_count is not None and stock.eps_beat_count > 0:
+            # 3.75 pts per beat, max 15 for 4/4 beats
+            earnings_momentum_score = stock.eps_beat_count * 3.75
+            score += earnings_momentum_score
+            reasons.append(f"EPS beats: {stock.eps_beat_count}/4 quarters")
+            if stock.earnings_growth_accelerating:
+                reasons.append("Earnings accelerating")
+
+        # Earnings growth (5 pts) — net income / EPS growth
+        if stock.earnings_growth is not None and stock.earnings_growth > 0:
+            eg_score = min(stock.earnings_growth * 25, 5)
+            score += eg_score
+            reasons.append(f"Earnings growth: {stock.earnings_growth:.1%}")
 
         return ScoredStock(stock=stock, score=score, reasons=reasons)
 
@@ -224,3 +249,31 @@ class GrowthStrategy:
 
         logger.info(f"Recommending {len(recommendations)} stocks for purchase")
         return recommendations
+
+    def get_sell_recommendations(
+        self, held_symbols: set[str]
+    ) -> list[tuple[str, str]]:
+        """Review held positions and recommend sells for degraded fundamentals.
+
+        Returns list of (symbol, reason) tuples for positions that should be sold.
+        """
+        sell_list: list[tuple[str, str]] = []
+
+        for symbol in held_symbols:
+            stock_data = self.fmp.get_stock_data(symbol)
+            if not stock_data:
+                sell_list.append((symbol, "Unable to fetch fundamentals"))
+                continue
+
+            passes, failures = self.passes_guardrails(stock_data)
+            if not passes:
+                sell_list.append((symbol, f"Failed guardrails: {', '.join(failures)}"))
+                continue
+
+            # Additional degradation checks beyond guardrails
+            if stock_data.revenue_growth is not None and stock_data.revenue_growth < 0:
+                sell_list.append((symbol, f"Revenue declining: {stock_data.revenue_growth:.1%}"))
+            elif stock_data.free_cash_flow is not None and stock_data.free_cash_flow < 0:
+                sell_list.append((symbol, f"FCF turned negative: ${stock_data.free_cash_flow:,.0f}"))
+
+        return sell_list

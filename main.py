@@ -18,9 +18,15 @@ from src.cache import (
     symbols_hash,
 )
 from src.data import FMPClient
-from src.charter import generate_performance_chart_image
+from src.charter import (
+    fetch_benchmark_history,
+    fetch_portfolio_history,
+    calculate_cumulative_returns,
+    generate_performance_chart,
+)
 from src.notifier import (
     format_performance_embed,
+    format_sell_embed,
     send_discord_chart_message,
     send_discord_notification,
     send_discord_notification_with_chart,
@@ -28,6 +34,8 @@ from src.notifier import (
 from src.optimizer import compute_individual_stats, optimize_allocations
 from src.reporter import format_console_report, generate_daily_report
 from src.strategy import GrowthStrategy
+from src.technicals import apply_technical_filters
+from src.tracker import TradeTracker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,14 +59,29 @@ def cmd_report(dry_run: bool = False) -> int:
     broker = AlpacaBroker()
     fmp = FMPClient()
 
-    report = generate_daily_report(broker=broker, fmp=fmp)
+    # Fetch portfolio + benchmark history once (shared by reporter and charter)
+    portfolio_df = fetch_portfolio_history(broker)
+    benchmark_df = None
+    if portfolio_df is not None and not portfolio_df.empty:
+        start_date = portfolio_df.index[0].strftime("%Y-%m-%d")
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        benchmark_df = fetch_benchmark_history(fmp, start_date, end_date)
+
+    report = generate_daily_report(
+        broker=broker, fmp=fmp,
+        portfolio_df=portfolio_df, benchmark_df=benchmark_df,
+    )
 
     # Always show console output
     print(format_console_report(report))
 
-    # Generate performance chart
+    # Generate performance chart from pre-fetched data
     print("Generating performance chart...")
-    chart_image = generate_performance_chart_image(broker, fmp)
+    chart_image = None
+    if portfolio_df is not None and benchmark_df is not None:
+        perf_data = calculate_cumulative_returns(portfolio_df, benchmark_df)
+        if perf_data is not None:
+            chart_image = generate_performance_chart(perf_data)
     if chart_image:
         print("Chart generated successfully.")
     else:
@@ -225,6 +248,16 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
 
     print(f"Got {len(prices_df)} days of data for {len(prices_df.columns)} symbols")
 
+    # Step 2b: Technical filters (SMA-200 + RSI)
+    print("\n=== Step 2b: Technical Filters ===")
+    prices_df, dropped_reasons = apply_technical_filters(prices_df)
+    for reason in dropped_reasons:
+        print(f"  Dropped: {reason}")
+    if prices_df.empty:
+        print("Error: All stocks filtered out by technical analysis.")
+        return 1
+    print(f"Passed filters: {len(prices_df.columns)} symbols")
+
     # Display per-stock historical performance
     stock_stats = compute_individual_stats(prices_df)
     print(f"\n{'Symbol':<8} {'1Y Return':>10} {'Volatility':>11} {'Sharpe':>7} {'Max DD':>8}")
@@ -238,7 +271,14 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
 
     # Step 3: Optimize allocations (with caching)
     print("\n=== Step 3: Portfolio Optimization ===")
-    opt_cache_key = f"result_{date_key}_{sym_hash}"
+    sym_hash_filtered = symbols_hash(list(prices_df.columns))
+    opt_cache_key = f"result_{date_key}_{sym_hash_filtered}"
+
+    # Build sector mapping for optimizer constraints
+    sector_map = {}
+    for r in recommendations:
+        if r.stock.symbol in prices_df.columns:
+            sector_map[r.stock.symbol] = r.stock.sector or "Unknown"
 
     result = None
     if not force_refresh:
@@ -248,7 +288,13 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
             print("  Using cached optimization result")
 
     if result is None:
-        result = optimize_allocations(prices_df, Config.MIN_ALLOCATION_THRESHOLD)
+        result = optimize_allocations(
+            prices_df,
+            Config.MIN_ALLOCATION_THRESHOLD,
+            max_position_pct=Config.MAX_SINGLE_POSITION_PCT,
+            sector_map=sector_map,
+            max_sector_pct=Config.MAX_SECTOR_ALLOCATION,
+        )
         if result.allocations:
             cache.save("optimization", opt_cache_key, optimization_result_to_dict(result))
 
@@ -283,6 +329,7 @@ def cmd_execute(force_refresh: bool = False) -> int:
     fmp = FMPClient()
     cache = CacheManager()
     strategy = GrowthStrategy(fmp, cache=cache, force_refresh=force_refresh)
+    tracker = TradeTracker()
 
     status = broker.get_account_status()
     held_symbols = {p.symbol for p in status.positions}
@@ -292,6 +339,40 @@ def cmd_execute(force_refresh: bool = False) -> int:
         print("(forcing fresh data)")
     print(f"Current positions: {len(held_symbols)}")
     print(f"Investment budget: ${Config.INVESTMENT_BUDGET:,.2f}")
+
+    # Step 0: Review existing positions for fundamental degradation
+    if held_symbols:
+        print("\n=== Step 0: Position Review ===")
+        sell_recs = strategy.get_sell_recommendations(held_symbols)
+        for symbol, reason in sell_recs:
+            print(f"  Selling {symbol}: {reason}")
+            position = broker.get_position(symbol)
+            order_id = broker.sell_all(symbol)
+            if order_id:
+                print(f"    Order placed: {order_id}")
+                if position:
+                    tracker.record_sell(
+                        symbol=symbol,
+                        price=position.current_price,
+                        quantity=float(position.qty),
+                        reason=reason,
+                    )
+                # Send sell notification
+                if Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:
+                    embed = format_sell_embed(
+                        symbol=symbol,
+                        reason=reason,
+                        entry_price=position.avg_entry_price if position else 0,
+                        exit_price=position.current_price if position else 0,
+                        pl=position.unrealized_pl if position else 0,
+                        hold_days=None,
+                    )
+                    send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
+                held_symbols.discard(symbol)
+            else:
+                print(f"    Sell FAILED")
+        if not sell_recs:
+            print("  All positions pass fundamental review.")
 
     # Step 1: Fundamental screening (uses cache)
     print("\n=== Step 1: Fundamental Screening ===")
@@ -339,9 +420,26 @@ def cmd_execute(force_refresh: bool = False) -> int:
 
     print(f"Got {len(prices_df)} days of data for {len(prices_df.columns)} symbols")
 
+    # Step 2b: Technical filters (SMA-200 + RSI)
+    print("\n=== Step 2b: Technical Filters ===")
+    prices_df, dropped_reasons = apply_technical_filters(prices_df)
+    for reason in dropped_reasons:
+        print(f"  Dropped: {reason}")
+    if prices_df.empty:
+        print("Error: All stocks filtered out by technical analysis.")
+        return 1
+    print(f"Passed filters: {len(prices_df.columns)} symbols")
+
     # Step 3: Optimize allocations (with caching)
     print("\n=== Step 3: Portfolio Optimization ===")
-    opt_cache_key = f"result_{date_key}_{sym_hash}"
+    sym_hash_filtered = symbols_hash(list(prices_df.columns))
+    opt_cache_key = f"result_{date_key}_{sym_hash_filtered}"
+
+    # Build sector mapping for optimizer constraints
+    sector_map = {}
+    for r in recommendations:
+        if r.stock.symbol in prices_df.columns:
+            sector_map[r.stock.symbol] = r.stock.sector or "Unknown"
 
     result = None
     if not force_refresh:
@@ -351,7 +449,13 @@ def cmd_execute(force_refresh: bool = False) -> int:
             print("  Using cached optimization result")
 
     if result is None:
-        result = optimize_allocations(prices_df, Config.MIN_ALLOCATION_THRESHOLD)
+        result = optimize_allocations(
+            prices_df,
+            Config.MIN_ALLOCATION_THRESHOLD,
+            max_position_pct=Config.MAX_SINGLE_POSITION_PCT,
+            sector_map=sector_map,
+            max_sector_pct=Config.MAX_SECTOR_ALLOCATION,
+        )
         if result.allocations:
             cache.save("optimization", opt_cache_key, optimization_result_to_dict(result))
 
@@ -363,7 +467,7 @@ def cmd_execute(force_refresh: bool = False) -> int:
     print(f"Expected Annual Return: {result.expected_annual_return:.1%}")
     print(f"Annual Volatility: {result.annual_volatility:.1%}")
 
-    # Step 4: Execute trades
+    # Step 4: Execute trades + trailing stops
     print(f"\n=== Executing Buys ({len(result.allocations)} positions) ===")
     orders_placed = 0
 
@@ -374,6 +478,23 @@ def cmd_execute(force_refresh: bool = False) -> int:
         if order_id:
             print(f"  Order placed: {order_id}")
             orders_placed += 1
+
+            # Record buy
+            stock = next((r.stock for r in recommendations if r.stock.symbol == symbol), None)
+            price = stock.price if stock else 0
+            qty_est = amount / price if price > 0 else 0
+            tracker.record_buy(symbol=symbol, price=price, quantity=qty_est)
+
+            # Place trailing stop
+            if Config.TRAILING_STOP_PCT > 0 and qty_est > 0:
+                time.sleep(1)  # Brief pause for order fill
+                stop_id = broker.place_trailing_stop(
+                    symbol, qty_est, Config.TRAILING_STOP_PCT * 100,
+                )
+                if stop_id:
+                    print(f"  Trailing stop ({Config.TRAILING_STOP_PCT:.0%}): {stop_id}")
+                else:
+                    print(f"  Warning: Trailing stop failed for {symbol}")
         else:
             print(f"  Order FAILED")
 

@@ -31,6 +31,10 @@ class StockData:
     # Cash flow
     free_cash_flow: float | None
     free_cash_flow_growth: float | None
+    # Earnings momentum
+    earnings_growth: float | None = None
+    eps_beat_count: int | None = None
+    earnings_growth_accelerating: bool | None = None
 
 
 class FMPClient:
@@ -92,6 +96,13 @@ class FMPClient:
     def get_financial_growth(self, symbol: str, limit: int = 1) -> list[dict[str, Any]]:
         return self._get("financial-growth", {"symbol": symbol, "limit": limit})
 
+    def get_earnings_surprises(self, symbol: str) -> list[dict[str, Any]]:
+        """Fetch recent earnings surprises for a symbol."""
+        try:
+            return self._get("earnings-surprises", {"symbol": symbol})
+        except Exception:
+            return []
+
     def get_stock_data(self, symbol: str) -> StockData | None:
         """Fetch and combine all relevant data for a stock."""
         try:
@@ -103,9 +114,34 @@ class FMPClient:
             quote = self.get_quote(symbol)
             ratios = self.get_ratios_ttm(symbol)
             metrics = self.get_key_metrics_ttm(symbol)
-            growth = self.get_financial_growth(symbol, limit=1)
+            growth = self.get_financial_growth(symbol, limit=4)
+            surprises = self.get_earnings_surprises(symbol)
 
             growth_data = growth[0] if growth else {}
+
+            # Earnings momentum: count EPS beats in last 4 quarters
+            eps_beat_count = 0
+            if surprises:
+                for s in surprises[:4]:
+                    actual = s.get("actualEarningResult")
+                    estimated = s.get("estimatedEarning")
+                    if actual is not None and estimated is not None and actual > estimated:
+                        eps_beat_count += 1
+
+            # Earnings growth from financial-growth (most recent quarter)
+            earnings_growth = growth_data.get("epsgrowth") or growth_data.get("netIncomeGrowth")
+
+            # Earnings acceleration: check if growth is trending up over 4 quarters
+            earnings_growth_accelerating = False
+            if len(growth) >= 3:
+                eg_values = []
+                for g in growth[:4]:
+                    val = g.get("epsgrowth") or g.get("netIncomeGrowth")
+                    if val is not None:
+                        eg_values.append(val)
+                if len(eg_values) >= 3:
+                    # Most recent > average of older quarters
+                    earnings_growth_accelerating = eg_values[0] > sum(eg_values[1:]) / len(eg_values[1:])
 
             return StockData(
                 symbol=symbol,
@@ -122,6 +158,9 @@ class FMPClient:
                 revenue_growth=growth_data.get("revenueGrowth"),
                 free_cash_flow=metrics.get("freeCashFlowTTM") if metrics else None,
                 free_cash_flow_growth=growth_data.get("freeCashFlowGrowth"),
+                earnings_growth=earnings_growth,
+                eps_beat_count=eps_beat_count,
+                earnings_growth_accelerating=earnings_growth_accelerating,
             )
         except Exception as e:
             logger.error(f"Error fetching data for {symbol}: {e}")

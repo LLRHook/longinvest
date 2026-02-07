@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.requests import MarketOrderRequest, TrailingStopOrderRequest
 
 from config import Config
 
@@ -101,10 +101,65 @@ class AlpacaBroker:
                 qty=p.qty,
                 market_value=float(p.market_value),
                 avg_entry_price=float(p.avg_entry_price),
+                current_price=float(p.current_price) if p.current_price else 0.0,
+                lastday_price=float(p.lastday_price) if p.lastday_price else 0.0,
                 unrealized_pl=float(p.unrealized_pl),
                 unrealized_plpc=float(p.unrealized_plpc),
+                change_today=float(p.change_today) if p.change_today else 0.0,
+                unrealized_intraday_pl=float(p.unrealized_intraday_pl) if p.unrealized_intraday_pl else 0.0,
+                unrealized_intraday_plpc=float(p.unrealized_intraday_plpc) if p.unrealized_intraday_plpc else 0.0,
             )
         except Exception:
+            return None
+
+    def sell_all(self, symbol: str) -> str | None:
+        """Close an entire position for a symbol."""
+        try:
+            order = self.client.close_position(symbol)
+            logger.info(f"Closed position: {symbol}, order_id={order.id}")
+            return str(order.id)
+        except Exception as e:
+            logger.error(f"Failed to close position for {symbol}: {e}")
+            return None
+
+    def sell_notional(self, symbol: str, notional: float) -> str | None:
+        """Sell a dollar amount of a position."""
+        try:
+            notional = round(notional, 2)
+            order_request = MarketOrderRequest(
+                symbol=symbol,
+                notional=notional,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+            )
+            order = self.client.submit_order(order_request)
+            logger.info(f"Sell order placed: {symbol} for ${notional:.2f}, order_id={order.id}")
+            return str(order.id)
+        except Exception as e:
+            logger.error(f"Failed to place sell order for {symbol}: {e}")
+            return None
+
+    def place_trailing_stop(self, symbol: str, qty: float, trail_percent: float) -> str | None:
+        """Place a trailing stop sell order (GTC).
+
+        Args:
+            symbol: Stock symbol
+            qty: Number of shares to cover
+            trail_percent: Trail percentage (e.g. 20.0 for 20%)
+        """
+        try:
+            order_request = TrailingStopOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.GTC,
+                trail_percent=str(trail_percent),
+            )
+            order = self.client.submit_order(order_request)
+            logger.info(f"Trailing stop placed: {symbol}, qty={qty}, trail={trail_percent}%, order_id={order.id}")
+            return str(order.id)
+        except Exception as e:
+            logger.error(f"Failed to place trailing stop for {symbol}: {e}")
             return None
 
     def get_held_symbols(self) -> set[str]:
