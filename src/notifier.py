@@ -89,6 +89,54 @@ def send_discord_notification_with_chart(
         return False
 
 
+def send_discord_chart_message(
+    webhook_url: str,
+    chart_image: BytesIO,
+    title: str = "Cumulative Growth: Portfolio vs SPY",
+) -> bool:
+    """Send a chart image as a standalone Discord message.
+
+    Args:
+        webhook_url: Discord webhook URL
+        chart_image: PNG image as BytesIO
+        title: Embed title for the chart message
+
+    Returns:
+        True if sent successfully, False otherwise
+    """
+    if not webhook_url:
+        logger.warning("Discord webhook URL not configured")
+        return False
+
+    embed = {
+        "title": title,
+        "image": {"url": "attachment://performance.png"},
+        "color": 0x3B82F6,
+    }
+    payload = {"embeds": [embed]}
+
+    try:
+        response = requests.post(
+            webhook_url,
+            files={"file": ("performance.png", chart_image, "image/png")},
+            data={"payload_json": json.dumps(payload)},
+            timeout=15,
+        )
+
+        if response.status_code == 429:
+            retry_after = response.json().get("retry_after", 5)
+            logger.warning(f"Discord rate limited, retry after {retry_after}s")
+            return False
+
+        response.raise_for_status()
+        logger.info("Discord chart message sent successfully")
+        return True
+
+    except requests.RequestException as e:
+        logger.error(f"Failed to send Discord chart message: {e}")
+        return False
+
+
 def format_performance_embed(report_data: dict[str, Any]) -> dict[str, Any]:
     """Format report data into a Discord embed.
 
