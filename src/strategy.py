@@ -32,7 +32,7 @@ class GrowthStrategy:
         self.cache = cache
         self.force_refresh = force_refresh
 
-    def get_screener_candidates(self, limit: int = 500) -> list[dict]:
+    def get_screener_candidates(self, limit: int = 2000) -> list[dict]:
         """Get stock universe from FMP screener, sorted by market cap.
 
         Returns list of dicts with symbol and marketCap.
