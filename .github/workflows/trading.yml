@@ -68,8 +68,8 @@ jobs:
           # Morning run (13-15 UTC) = market open = execute trades
           # Evening run (20-22 UTC) = market close = daily report
           if [ "$HOUR" -ge 13 ] && [ "$HOUR" -le 15 ]; then
-            echo "action=dry-run" >> $GITHUB_OUTPUT
-            echo "Scheduled: Market open - running dry-run (change to 'execute' for live trading)"
+            echo "action=execute" >> $GITHUB_OUTPUT
+            echo "Scheduled: Market open - running execute (change to 'dry-run' for testing)"
           else
             echo "action=report" >> $GITHUB_OUTPUT
             echo "Scheduled: Market close - sending daily report"
