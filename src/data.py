@@ -23,15 +23,14 @@ class StockData:
     is_etf: bool
     is_actively_trading: bool
     # Ratios
-    pe_ratio: float | None
     de_ratio: float | None
-    current_ratio: float | None
     roe: float | None
     gross_margin: float | None
-    operating_margin: float | None
     # Growth
     revenue_growth: float | None
-    eps_growth: float | None
+    # Cash flow
+    free_cash_flow: float | None
+    free_cash_flow_growth: float | None
 
 
 class FMPClient:
@@ -117,14 +116,12 @@ class FMPClient:
                 country=profile.get("country", ""),
                 is_etf=profile.get("isEtf", False),
                 is_actively_trading=profile.get("isActivelyTrading", True),
-                pe_ratio=ratios.get("peRatioTTM") if ratios else None,
                 de_ratio=ratios.get("debtEquityRatioTTM") if ratios else None,
-                current_ratio=ratios.get("currentRatioTTM") if ratios else None,
                 roe=metrics.get("roeTTM") if metrics else None,
                 gross_margin=ratios.get("grossProfitMarginTTM") if ratios else None,
-                operating_margin=ratios.get("operatingProfitMarginTTM") if ratios else None,
                 revenue_growth=growth_data.get("revenueGrowth"),
-                eps_growth=growth_data.get("epsgrowth"),
+                free_cash_flow=metrics.get("freeCashFlowTTM") if metrics else None,
+                free_cash_flow_growth=growth_data.get("freeCashFlowGrowth"),
             )
         except Exception as e:
             logger.error(f"Error fetching data for {symbol}: {e}")
