@@ -17,7 +17,12 @@ from src.cache import (
     symbols_hash,
 )
 from src.data import FMPClient
-from src.notifier import format_performance_embed, send_discord_notification
+from src.charter import generate_performance_chart_image
+from src.notifier import (
+    format_performance_embed,
+    send_discord_notification,
+    send_discord_notification_with_chart,
+)
 from src.optimizer import compute_individual_stats, optimize_allocations
 from src.reporter import format_console_report, generate_daily_report
 from src.strategy import GrowthStrategy
@@ -49,6 +54,14 @@ def cmd_report(dry_run: bool = False) -> int:
     # Always show console output
     print(format_console_report(report))
 
+    # Generate performance chart
+    print("Generating performance chart...")
+    chart_image = generate_performance_chart_image(broker, fmp)
+    if chart_image:
+        print("Chart generated successfully.")
+    else:
+        print("Chart generation skipped (not enough history).")
+
     if dry_run:
         print("[DRY RUN - Discord notification not sent]")
         print("\nDiscord embed preview:")
@@ -59,12 +72,19 @@ def cmd_report(dry_run: bool = False) -> int:
         print(f"  Title: {title}")
         print(f"  Color: {'Green' if embed['color'] == 0x00FF00 else 'Red'}")
         print(f"  Description:\n    {desc.replace(chr(10), chr(10) + '    ')}")
+        if chart_image:
+            print("  Chart: [attached]")
         return 0
 
     # Send Discord notification
     if Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:
         embed = format_performance_embed(report)
-        success = send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
+        if chart_image:
+            success = send_discord_notification_with_chart(
+                Config.DISCORD_WEBHOOK_URL, embed, chart_image
+            )
+        else:
+            success = send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
         if success:
             print("Discord notification sent.")
         else:

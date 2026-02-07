@@ -39,6 +39,7 @@ class GrowthStrategy:
         """
         stocks = self.fmp.get_screener_stocks(
             min_market_cap=Config.MIN_MARKET_CAP,
+            max_market_cap=Config.MAX_MARKET_CAP,
             limit=limit,
         )
         stocks.sort(key=lambda x: x.get("marketCap", 0), reverse=True)
@@ -106,13 +107,11 @@ class GrowthStrategy:
     def screen(
         self,
         existing_symbols: set[str] | None = None,
-        max_fundamental_analysis: int = 100,
     ) -> list[ScoredStock]:
         """Run the full screening process and return ranked stocks.
 
         Args:
             existing_symbols: Symbols to exclude (already held)
-            max_fundamental_analysis: Limit detailed API calls to top N by market cap
         """
         existing = existing_symbols or set()
 
@@ -136,7 +135,7 @@ class GrowthStrategy:
         logger.info(f"After filtering existing positions: {len(candidates)} candidates")
 
         # Limit fundamental analysis to top N by market cap (saves API calls)
-        candidates = candidates[:max_fundamental_analysis]
+        candidates = candidates[:Config.MAX_FUNDAMENTAL_ANALYSIS]
         logger.info(f"Analyzing top {len(candidates)} by market cap")
 
         scored_stocks: list[ScoredStock] = []

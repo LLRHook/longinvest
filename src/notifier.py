@@ -1,4 +1,6 @@
+import json
 import logging
+from io import BytesIO
 from typing import Any
 
 import requests
@@ -40,6 +42,50 @@ def send_discord_notification(webhook_url: str, embed: dict[str, Any]) -> bool:
 
     except requests.RequestException as e:
         logger.error(f"Failed to send Discord notification: {e}")
+        return False
+
+
+def send_discord_notification_with_chart(
+    webhook_url: str, embed: dict[str, Any], chart_image: BytesIO
+) -> bool:
+    """Send a Discord notification with an embed and attached chart image.
+
+    Uses multipart/form-data to attach the chart PNG and reference it in the embed.
+
+    Args:
+        webhook_url: Discord webhook URL
+        embed: Discord embed object
+        chart_image: PNG image as BytesIO
+
+    Returns:
+        True if sent successfully, False otherwise
+    """
+    if not webhook_url:
+        logger.warning("Discord webhook URL not configured")
+        return False
+
+    embed["image"] = {"url": "attachment://performance.png"}
+    payload = {"embeds": [embed]}
+
+    try:
+        response = requests.post(
+            webhook_url,
+            files={"file": ("performance.png", chart_image, "image/png")},
+            data={"payload_json": json.dumps(payload)},
+            timeout=15,
+        )
+
+        if response.status_code == 429:
+            retry_after = response.json().get("retry_after", 5)
+            logger.warning(f"Discord rate limited, retry after {retry_after}s")
+            return False
+
+        response.raise_for_status()
+        logger.info("Discord notification with chart sent successfully")
+        return True
+
+    except requests.RequestException as e:
+        logger.error(f"Failed to send Discord notification with chart: {e}")
         return False
 
 

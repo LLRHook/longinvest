@@ -93,30 +93,6 @@ class FMPClient:
     def get_financial_growth(self, symbol: str, limit: int = 1) -> list[dict[str, Any]]:
         return self._get("financial-growth", {"symbol": symbol, "limit": limit})
 
-    def get_stock_universe(self) -> list[str]:
-        """Return a curated list of mega/large-cap US stocks to screen.
-
-        Limited to ~50 stocks to stay within FMP free tier API limits.
-        Each stock requires ~5 API calls, so 50 stocks = ~250 calls.
-        """
-        return [
-            # Tech (most growth potential)
-            "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
-            "AMD", "ADBE", "INTC", "CSCO", "PLTR", "UBER", "SQ", "SHOP",
-            # Healthcare
-            "UNH", "JNJ", "PFE", "ABBV",
-            # Finance
-            "JPM", "V", "BAC", "WFC", "GS", "C",
-            # Consumer
-            "WMT", "KO", "PEP", "COST",
-            # Industrial
-            "CAT", "GE",
-            # Energy
-            "XOM", "CVX",
-            # Comm Services
-            "NFLX", "DIS",
-        ]
-
     def get_stock_data(self, symbol: str) -> StockData | None:
         """Fetch and combine all relevant data for a stock."""
         try:
@@ -155,7 +131,10 @@ class FMPClient:
             return None
 
     def get_screener_stocks(
-        self, min_market_cap: float = 5e9, limit: int = 500
+        self,
+        min_market_cap: float = 300e6,
+        max_market_cap: float | None = None,
+        limit: int = 500,
     ) -> list[dict[str, Any]]:
         """Get US stock universe from FMP company screener.
 
@@ -168,6 +147,8 @@ class FMPClient:
             "marketCapMoreThan": int(min_market_cap),
             "limit": limit,
         }
+        if max_market_cap is not None:
+            params["marketCapLowerThan"] = int(max_market_cap)
         result = self._get("company-screener", params)
         return [
             {"symbol": s["symbol"], "marketCap": s.get("marketCap", 0)}
@@ -212,9 +193,7 @@ class FMPClient:
             df["date"] = pd.to_datetime(df["date"])
             df = df.set_index("date").sort_index()
 
-            # Use adjClose if available, otherwise close
-            close_col = "adjClose" if "adjClose" in df.columns else "close"
-            return df[[close_col]].rename(columns={close_col: "close"})
+            return df[["close"]]
 
         except Exception as e:
             logger.error(f"Error fetching historical prices for {symbol}: {e}")
