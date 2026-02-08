@@ -3,6 +3,8 @@ import logging
 import numpy as np
 import pandas as pd
 
+from config import Config
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,28 +60,33 @@ def compute_rsi(prices: pd.Series, period: int = 14) -> float | None:
 
 def apply_technical_filters(
     prices_df: pd.DataFrame,
-    sma_period: int = 200,
+    sma_period: int | None = None,
     rsi_period: int = 14,
-    rsi_overbought: float = 70.0,
+    rsi_overbought: float | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Filter stocks based on SMA-200 trend and RSI overbought conditions.
+    """Filter stocks based on SMA trend and RSI overbought conditions.
 
     Args:
         prices_df: DataFrame with Date index, columns = symbols, values = prices.
-        sma_period: Period for SMA trend filter.
+        sma_period: Period for SMA trend filter. Defaults to Config.SMA_TREND_PERIOD.
         rsi_period: Period for RSI calculation.
         rsi_overbought: RSI threshold above which stock is considered overbought.
+            Defaults to Config.RSI_OVERBOUGHT.
 
     Returns:
         Tuple of (filtered DataFrame, list of drop reason strings).
     """
+    if sma_period is None:
+        sma_period = Config.SMA_TREND_PERIOD
+    if rsi_overbought is None:
+        rsi_overbought = Config.RSI_OVERBOUGHT
     dropped = []
     keep_symbols = []
 
     for symbol in prices_df.columns:
         prices = prices_df[symbol].dropna()
 
-        # SMA-200 filter: price must be above SMA
+        # SMA trend filter: price must be above SMA
         sma = compute_sma(prices, sma_period)
         if sma is not None and prices.iloc[-1] < sma:
             dropped.append(f"{symbol}: below SMA-{sma_period} (${prices.iloc[-1]:.2f} < ${sma:.2f})")
