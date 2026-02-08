@@ -49,89 +49,94 @@ class GrowthStrategy:
     def passes_guardrails(self, stock: StockData) -> tuple[bool, list[str]]:
         """Check if stock passes basic quality guardrails.
 
-        Intentionally lenient — scoring does the real ranking work.
+        Intentionally lenient -- scoring does the real ranking work.
         These just eliminate clearly broken companies.
         """
         failures = []
 
-        # Revenue growth must exist and be positive
-        if stock.revenue_growth is None or stock.revenue_growth <= 0:
+        # Minimum revenue filter (avoid penny-stock traps)
+        if stock.revenue is not None and stock.revenue < Config.MIN_REVENUE:
+            failures.append(f"Revenue too low: ${stock.revenue:,.0f}")
+
+        # Revenue growth must meet minimum threshold
+        if stock.revenue_growth is None or stock.revenue_growth < Config.MIN_REVENUE_GROWTH:
             growth_str = f"{stock.revenue_growth:.1%}" if stock.revenue_growth is not None else "N/A"
-            failures.append(f"No revenue growth: {growth_str}")
+            failures.append(f"Revenue growth below threshold: {growth_str}")
 
-        # Free cash flow must be positive (if data available)
-        if stock.free_cash_flow is not None and stock.free_cash_flow <= 0:
-            failures.append(f"Negative FCF: ${stock.free_cash_flow:,.0f}")
+        # Free cash flow check (configurable)
+        if Config.REQUIRE_POSITIVE_FCF:
+            if stock.free_cash_flow is not None and stock.free_cash_flow <= 0:
+                failures.append(f"Negative FCF: ${stock.free_cash_flow:,.0f}")
 
-        # D/E ratio must be < 1.5 (if data available)
-        if stock.de_ratio is not None and stock.de_ratio > 1.5:
+        # D/E ratio check (configurable threshold)
+        if stock.de_ratio is not None and stock.de_ratio > Config.MAX_DE_RATIO:
             failures.append(f"High D/E: {stock.de_ratio:.2f}")
 
         return len(failures) == 0, failures
 
     def score_stock(self, stock: StockData) -> ScoredStock:
-        """Score a stock based on small cap growth metrics. Max 100 points.
+        """Score a stock based on aggressive growth metrics. Max 100 points.
 
         Scoring breakdown:
-            Revenue growth:        30 pts
-            FCF yield:             20 pts
-            ROE:                   15 pts
-            Gross margin:          10 pts
-            FCF growth bonus:       5 pts
-            Earnings momentum:     15 pts (EPS beats)
-            Earnings growth:        5 pts
+            Revenue growth:            30 pts
+            Revenue acceleration:      10 pts
+            EPS beats:                 20 pts
+            Earnings growth:           15 pts
+            Gross margin:              10 pts
+            FCF yield:                  5 pts
+            ROE:                        5 pts
+            Earnings acceleration:      5 pts
         """
         score = 0.0
         reasons = []
 
-        # Revenue growth (30 pts) — top signal for small caps
+        # Revenue growth (30 pts) -- top signal for small caps
         if stock.revenue_growth is not None and stock.revenue_growth > 0:
             growth_score = min(stock.revenue_growth * 100, 30)
             score += growth_score
             reasons.append(f"Revenue growth: {stock.revenue_growth:.1%}")
 
-        # FCF yield (20 pts) — proves growth is sustainable
-        if stock.free_cash_flow is not None and stock.free_cash_flow > 0:
-            if stock.market_cap and stock.market_cap > 0:
-                fcf_yield = stock.free_cash_flow / stock.market_cap
-                fcf_score = min(fcf_yield * 400, 20)
-                score += fcf_score
-                reasons.append(f"FCF yield: {fcf_yield:.1%}")
-            else:
-                score += 12
-                reasons.append("FCF positive (yield N/A)")
+        # Revenue acceleration (10 pts) -- QoQ growth rate increasing
+        if stock.revenue_growth_accelerating:
+            score += 10
+            reasons.append("Revenue growth accelerating")
 
-        # ROE (15 pts) — capital efficiency
-        if stock.roe is not None and stock.roe > 0:
-            roe_score = min(stock.roe * 75, 15)
-            score += roe_score
-            reasons.append(f"ROE: {stock.roe:.1%}")
+        # EPS beats (20 pts) -- strongest momentum signal
+        if stock.eps_beat_count is not None and stock.eps_beat_count > 0:
+            eps_score = stock.eps_beat_count * 5.0
+            score += eps_score
+            reasons.append(f"EPS beats: {stock.eps_beat_count}/4 quarters")
 
-        # Gross margin (10 pts) — pricing power, scored above 30%
+        # Earnings growth (15 pts) -- directly rewards profit growth
+        if stock.earnings_growth is not None and stock.earnings_growth > 0:
+            eg_score = min(stock.earnings_growth * 75, 15)
+            score += eg_score
+            reasons.append(f"Earnings growth: {stock.earnings_growth:.1%}")
+
+        # Gross margin (10 pts) -- pricing power, scored above 30%
         if stock.gross_margin is not None and stock.gross_margin > 0.3:
             margin_score = min((stock.gross_margin - 0.3) * 50, 10)
             score += margin_score
             reasons.append(f"Gross margin: {stock.gross_margin:.1%}")
 
-        # FCF growth bonus (5 pts) — improving cash generation
-        if stock.free_cash_flow_growth is not None and stock.free_cash_flow_growth > 0.10:
+        # FCF yield (5 pts) -- less relevant for growth
+        if stock.free_cash_flow is not None and stock.free_cash_flow > 0:
+            if stock.market_cap and stock.market_cap > 0:
+                fcf_yield = stock.free_cash_flow / stock.market_cap
+                fcf_score = min(fcf_yield * 100, 5)
+                score += fcf_score
+                reasons.append(f"FCF yield: {fcf_yield:.1%}")
+
+        # ROE (5 pts) -- less relevant for early growth
+        if stock.roe is not None and stock.roe > 0:
+            roe_score = min(stock.roe * 25, 5)
+            score += roe_score
+            reasons.append(f"ROE: {stock.roe:.1%}")
+
+        # Earnings acceleration bonus (5 pts)
+        if stock.earnings_growth_accelerating:
             score += 5
-            reasons.append(f"FCF growth: {stock.free_cash_flow_growth:.1%}")
-
-        # Earnings momentum (15 pts) — EPS beat frequency
-        if stock.eps_beat_count is not None and stock.eps_beat_count > 0:
-            # 3.75 pts per beat, max 15 for 4/4 beats
-            earnings_momentum_score = stock.eps_beat_count * 3.75
-            score += earnings_momentum_score
-            reasons.append(f"EPS beats: {stock.eps_beat_count}/4 quarters")
-            if stock.earnings_growth_accelerating:
-                reasons.append("Earnings accelerating")
-
-        # Earnings growth (5 pts) — net income / EPS growth
-        if stock.earnings_growth is not None and stock.earnings_growth > 0:
-            eg_score = min(stock.earnings_growth * 25, 5)
-            score += eg_score
-            reasons.append(f"Earnings growth: {stock.earnings_growth:.1%}")
+            reasons.append("Earnings accelerating")
 
         return ScoredStock(stock=stock, score=score, reasons=reasons)
 
@@ -271,9 +276,9 @@ class GrowthStrategy:
                 continue
 
             # Additional degradation checks beyond guardrails
-            if stock_data.revenue_growth is not None and stock_data.revenue_growth < 0:
+            if stock_data.revenue_growth is not None and stock_data.revenue_growth < Config.MIN_REVENUE_GROWTH:
                 sell_list.append((symbol, f"Revenue declining: {stock_data.revenue_growth:.1%}"))
-            elif stock_data.free_cash_flow is not None and stock_data.free_cash_flow < 0:
+            elif Config.REQUIRE_POSITIVE_FCF and stock_data.free_cash_flow is not None and stock_data.free_cash_flow < 0:
                 sell_list.append((symbol, f"FCF turned negative: ${stock_data.free_cash_flow:,.0f}"))
 
         return sell_list

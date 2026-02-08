@@ -151,9 +151,11 @@ def dict_to_stock_data(d: dict[str, Any]) -> Any:
     """Convert dict back to StockData. Handles missing new fields for backward compat."""
     from src.data import StockData
     # Provide defaults for new optional fields not present in old caches
+    d.setdefault("revenue", None)
     d.setdefault("earnings_growth", None)
     d.setdefault("eps_beat_count", None)
     d.setdefault("earnings_growth_accelerating", None)
+    d.setdefault("revenue_growth_accelerating", None)
     return StockData(**d)
 
 

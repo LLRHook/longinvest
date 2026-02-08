@@ -1,5 +1,7 @@
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -31,25 +33,34 @@ class StockData:
     # Cash flow
     free_cash_flow: float | None
     free_cash_flow_growth: float | None
+    # Revenue
+    revenue: float | None = None
     # Earnings momentum
     earnings_growth: float | None = None
     eps_beat_count: int | None = None
     earnings_growth_accelerating: bool | None = None
+    revenue_growth_accelerating: bool | None = None
 
 
 class FMPClient:
     def __init__(self):
         self.api_key = Config.FMP_API_KEY
         self.base_url = Config.FMP_BASE_URL
-        self.rate_limit_ms = Config.FMP_RATE_LIMIT_MS
-        self._last_request_time: float = 0
+        self.max_concurrent = Config.FMP_MAX_CONCURRENT
         self._api_calls: int = 0
+        self._lock = threading.Lock()
+        # Token-bucket rate limiter: 300 calls/min = 5 calls/sec
+        self._min_interval = 1.0 / 5.0  # 200ms between calls
+        self._last_request_time: float = 0
+        self._rate_lock = threading.Lock()
 
     def _rate_limit(self) -> None:
-        elapsed = (time.time() - self._last_request_time) * 1000
-        if elapsed < self.rate_limit_ms:
-            time.sleep((self.rate_limit_ms - elapsed) / 1000)
-        self._last_request_time = time.time()
+        with self._rate_lock:
+            now = time.time()
+            elapsed = now - self._last_request_time
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_request_time = time.time()
 
     def _get(self, endpoint: str, params: dict[str, Any] | None = None, retries: int = 3) -> Any:
         self._rate_limit()
@@ -58,8 +69,10 @@ class FMPClient:
         if params:
             request_params.update(params)
 
-        self._api_calls += 1
-        logger.debug(f"FMP API call #{self._api_calls}: {endpoint}")
+        with self._lock:
+            self._api_calls += 1
+            call_num = self._api_calls
+        logger.debug(f"FMP API call #{call_num}: {endpoint}")
 
         for attempt in range(retries):
             response = requests.get(url, params=request_params, timeout=30)
@@ -104,18 +117,29 @@ class FMPClient:
             return []
 
     def get_stock_data(self, symbol: str) -> StockData | None:
-        """Fetch and combine all relevant data for a stock."""
+        """Fetch and combine all relevant data for a stock.
+
+        Fires all 6 API calls concurrently since they are independent.
+        """
         try:
-            profile = self.get_profile(symbol)
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                f_profile = executor.submit(self.get_profile, symbol)
+                f_quote = executor.submit(self.get_quote, symbol)
+                f_ratios = executor.submit(self.get_ratios_ttm, symbol)
+                f_metrics = executor.submit(self.get_key_metrics_ttm, symbol)
+                f_growth = executor.submit(self.get_financial_growth, symbol, 4)
+                f_surprises = executor.submit(self.get_earnings_surprises, symbol)
+
+            profile = f_profile.result()
             if not profile:
                 logger.warning(f"No profile found for {symbol}")
                 return None
 
-            quote = self.get_quote(symbol)
-            ratios = self.get_ratios_ttm(symbol)
-            metrics = self.get_key_metrics_ttm(symbol)
-            growth = self.get_financial_growth(symbol, limit=4)
-            surprises = self.get_earnings_surprises(symbol)
+            quote = f_quote.result()
+            ratios = f_ratios.result()
+            metrics = f_metrics.result()
+            growth = f_growth.result()
+            surprises = f_surprises.result()
 
             growth_data = growth[0] if growth else {}
 
@@ -143,6 +167,27 @@ class FMPClient:
                     # Most recent > average of older quarters
                     earnings_growth_accelerating = eg_values[0] > sum(eg_values[1:]) / len(eg_values[1:])
 
+            # Revenue acceleration: check if revenue growth is trending up over 4 quarters
+            revenue_growth_accelerating = False
+            if len(growth) >= 3:
+                rg_values = []
+                for g in growth[:4]:
+                    val = g.get("revenueGrowth")
+                    if val is not None:
+                        rg_values.append(val)
+                if len(rg_values) >= 3:
+                    revenue_growth_accelerating = rg_values[0] > sum(rg_values[1:]) / len(rg_values[1:])
+
+            # Revenue (from metrics TTM)
+            revenue = metrics.get("revenuePerShareTTM") if metrics else None
+            if revenue is not None and quote:
+                # revenuePerShareTTM * shares outstanding approximation
+                shares = quote.get("sharesOutstanding")
+                if shares:
+                    revenue = revenue * shares
+                else:
+                    revenue = None
+
             return StockData(
                 symbol=symbol,
                 name=profile.get("companyName", ""),
@@ -158,9 +203,11 @@ class FMPClient:
                 revenue_growth=growth_data.get("revenueGrowth"),
                 free_cash_flow=metrics.get("freeCashFlowTTM") if metrics else None,
                 free_cash_flow_growth=growth_data.get("freeCashFlowGrowth"),
+                revenue=revenue,
                 earnings_growth=earnings_growth,
                 eps_beat_count=eps_beat_count,
                 earnings_growth_accelerating=earnings_growth_accelerating,
+                revenue_growth_accelerating=revenue_growth_accelerating,
             )
         except Exception as e:
             logger.error(f"Error fetching data for {symbol}: {e}")
@@ -242,7 +289,7 @@ class FMPClient:
         to_date: str,
         min_days: int = 200,
     ) -> pd.DataFrame:
-        """Fetch historical prices for multiple symbols.
+        """Fetch historical prices for multiple symbols concurrently.
 
         Returns:
             DataFrame with Date index, columns = symbols, values = adjusted close.
@@ -250,15 +297,25 @@ class FMPClient:
         """
         price_data: dict[str, pd.Series] = {}
 
-        for symbol in symbols:
-            df = self.get_historical_prices(symbol, from_date, to_date)
-            if df is not None and len(df) >= min_days:
-                price_data[symbol] = df["close"]
-            else:
-                days = len(df) if df is not None else 0
-                logger.warning(
-                    f"Dropping {symbol}: only {days} days of data (need {min_days})"
-                )
+        with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
+            futures = {
+                executor.submit(self.get_historical_prices, symbol, from_date, to_date): symbol
+                for symbol in symbols
+            }
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    df = future.result()
+                except Exception as e:
+                    logger.error(f"Error fetching prices for {symbol}: {e}")
+                    continue
+                if df is not None and len(df) >= min_days:
+                    price_data[symbol] = df["close"]
+                else:
+                    days = len(df) if df is not None else 0
+                    logger.warning(
+                        f"Dropping {symbol}: only {days} days of data (need {min_days})"
+                    )
 
         if not price_data:
             return pd.DataFrame()

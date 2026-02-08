@@ -499,7 +499,28 @@ def cmd_execute(force_refresh: bool = False) -> int:
             print(f"  Order FAILED")
 
     print(f"\nOrders placed: {orders_placed}/{len(result.allocations)}")
-    print(f"Total API calls: {fmp.get_api_call_count()}")
+
+    # Step 5: Tighten trailing stops on winning positions
+    if Config.TRAILING_STOP_TIGHT_PCT > 0:
+        print("\n=== Step 5: Reviewing Trailing Stops ===")
+        refreshed_status = broker.get_account_status()
+        for pos in refreshed_status.positions:
+            if pos.unrealized_plpc >= Config.PROFIT_TARGET_TIGHTEN_PCT:
+                print(f"  {pos.symbol}: up {pos.unrealized_plpc:.1%}, tightening stop to {Config.TRAILING_STOP_TIGHT_PCT:.0%}")
+                cancelled = broker.cancel_open_orders(pos.symbol)
+                if cancelled:
+                    print(f"    Cancelled {cancelled} existing order(s)")
+                stop_id = broker.place_trailing_stop(
+                    pos.symbol,
+                    float(pos.qty),
+                    Config.TRAILING_STOP_TIGHT_PCT * 100,
+                )
+                if stop_id:
+                    print(f"    Tight trailing stop: {stop_id}")
+                else:
+                    print(f"    Warning: Tight trailing stop failed for {pos.symbol}")
+
+    print(f"\nTotal API calls: {fmp.get_api_call_count()}")
     return 0
 
 
