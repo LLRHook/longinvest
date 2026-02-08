@@ -5,14 +5,19 @@ on:
     # Market open: 9:30 AM ET
     # Winter (Nov-Mar): ET = UTC-5, so 9:30 AM ET = 14:30 UTC
     # Summer (Mar-Nov): ET = UTC-4, so 9:30 AM ET = 13:30 UTC
-    # Using 14:30 UTC (winter time) - adjust in March/November
+    # Run at both times; the market-check step will skip if market is closed
+    - cron: '30 13 * * 1-5'
     - cron: '30 14 * * 1-5'
 
     # Daily report: 4:30 PM ET
     # Winter: 4:30 PM ET = 21:30 UTC
     # Summer: 4:30 PM ET = 20:30 UTC
-    # Using 21:30 UTC (winter time) - adjust in March/November
+    - cron: '30 20 * * 1-5'
     - cron: '30 21 * * 1-5'
+
+    # Optional midday check: ~1 PM ET
+    - cron: '00 17 * * 1-5'
+    - cron: '00 18 * * 1-5'
 
   workflow_dispatch:
     inputs:
@@ -51,7 +56,28 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Check if market is open
+        id: market-check
+        run: |
+          # Skip market check for manual triggers
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          python -c "
+          import exchange_calendars as ec
+          import datetime
+          nyse = ec.get_calendar('XNYS')
+          today = datetime.date.today()
+          if not nyse.is_session(today):
+              print('Market closed today (holiday or weekend)')
+              exit(1)
+          print(f'Market open today: {today}')
+          " && echo "skip=false" >> $GITHUB_OUTPUT || echo "skip=true" >> $GITHUB_OUTPUT
+
       - name: Determine action based on schedule
+        if: steps.market-check.outputs.skip != 'true'
         id: determine-action
         run: |
           # If manually triggered, use the input
@@ -66,27 +92,31 @@ jobs:
           echo "Current UTC hour: $HOUR"
 
           # Morning run (13-15 UTC) = market open = execute trades
+          # Midday run (17-18 UTC) = midday check = dry-run
           # Evening run (20-22 UTC) = market close = daily report
           if [ "$HOUR" -ge 13 ] && [ "$HOUR" -le 15 ]; then
             echo "action=execute" >> $GITHUB_OUTPUT
-            echo "Scheduled: Market open - running execute (change to 'dry-run' for testing)"
+            echo "Scheduled: Market open - running execute"
+          elif [ "$HOUR" -ge 17 ] && [ "$HOUR" -le 18 ]; then
+            echo "action=dry-run" >> $GITHUB_OUTPUT
+            echo "Scheduled: Midday check - running dry-run"
           else
             echo "action=report" >> $GITHUB_OUTPUT
             echo "Scheduled: Market close - sending daily report"
           fi
 
       - name: Run status check
-        if: steps.determine-action.outputs.action == 'status'
+        if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'status'
         run: python main.py --status
 
       - name: Run dry-run (no trades)
-        if: steps.determine-action.outputs.action == 'dry-run'
+        if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'dry-run'
         run: python main.py --dry-run
 
       - name: Execute trades (LIVE)
-        if: steps.determine-action.outputs.action == 'execute'
+        if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'execute'
         run: python main.py
 
       - name: Send daily report
-        if: steps.determine-action.outputs.action == 'report'
+        if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'report'
         run: python main.py --report
