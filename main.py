@@ -25,6 +25,7 @@ from src.charter import (
     generate_performance_chart,
 )
 from src.notifier import (
+    format_circuit_breaker_embed,
     format_performance_embed,
     format_sell_embed,
     send_discord_chart_message,
@@ -340,6 +341,34 @@ def cmd_execute(force_refresh: bool = False) -> int:
     print(f"Current positions: {len(held_symbols)}")
     print(f"Investment budget: ${Config.INVESTMENT_BUDGET:,.2f}")
 
+    # Circuit breaker: halt if portfolio or market is crashing
+    portfolio_change = 0.0
+    if status.last_equity > 0:
+        portfolio_change = (status.portfolio_value - status.last_equity) / status.last_equity
+    if portfolio_change < Config.CIRCUIT_BREAKER_PCT:
+        msg = f"Circuit breaker triggered: portfolio down {portfolio_change:.2%} today (threshold: {Config.CIRCUIT_BREAKER_PCT:.0%})"
+        print(f"\n{msg}")
+        logger.warning(msg)
+        if Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:
+            embed = format_circuit_breaker_embed(msg, portfolio_change)
+            send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
+        return 0
+
+    spy_quote = fmp.get_quote("SPY")
+    if spy_quote:
+        spy_prev = spy_quote.get("previousClose", 0)
+        spy_price = spy_quote.get("price", 0)
+        if spy_prev > 0:
+            spy_change = (spy_price - spy_prev) / spy_prev
+            if spy_change < Config.MARKET_CIRCUIT_BREAKER_PCT:
+                msg = f"Market circuit breaker: SPY down {spy_change:.2%} today (threshold: {Config.MARKET_CIRCUIT_BREAKER_PCT:.0%})"
+                print(f"\n{msg}")
+                logger.warning(msg)
+                if Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:
+                    embed = format_circuit_breaker_embed(msg, spy_change)
+                    send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
+                return 0
+
     # Step 0: Review existing positions for fundamental degradation
     if held_symbols:
         print("\n=== Step 0: Position Review ===")
@@ -373,6 +402,31 @@ def cmd_execute(force_refresh: bool = False) -> int:
                 print(f"    Sell FAILED")
         if not sell_recs:
             print("  All positions pass fundamental review.")
+
+    # Step 0b: Rebalance overweight positions
+    if Config.ENABLE_REBALANCING and held_symbols:
+        print("\n=== Step 0b: Rebalancing ===")
+        rebalance_status = broker.get_account_status()
+        portfolio_value = rebalance_status.portfolio_value
+        if portfolio_value > 0:
+            target_pct = 1.0 / max(len(rebalance_status.positions), 1)
+            for pos in rebalance_status.positions:
+                actual_pct = pos.market_value / portfolio_value
+                drift = actual_pct - target_pct
+                if drift > Config.REBALANCE_THRESHOLD:
+                    trim_amount = drift * portfolio_value
+                    print(f"  {pos.symbol}: {actual_pct:.1%} -> target {target_pct:.1%}, trimming ${trim_amount:,.2f}")
+                    order_id = broker.sell_notional(pos.symbol, trim_amount)
+                    if order_id:
+                        print(f"    Trim order: {order_id}")
+                        tracker.record_sell(
+                            symbol=pos.symbol,
+                            price=pos.current_price,
+                            quantity=trim_amount / pos.current_price if pos.current_price > 0 else 0,
+                            reason=f"Rebalance: {actual_pct:.1%} -> {target_pct:.1%}",
+                        )
+                    else:
+                        print(f"    Trim FAILED for {pos.symbol}")
 
     # Step 1: Fundamental screening (uses cache)
     print("\n=== Step 1: Fundamental Screening ===")
@@ -466,6 +520,33 @@ def cmd_execute(force_refresh: bool = False) -> int:
     print(f"Sharpe Ratio: {result.sharpe_ratio:.2f}")
     print(f"Expected Annual Return: {result.expected_annual_return:.1%}")
     print(f"Annual Volatility: {result.annual_volatility:.1%}")
+
+    # Step 3b: Intraday momentum check -- skip stocks crashing today
+    if Config.ENABLE_INTRADAY_CHECK:
+        print("\n=== Step 3b: Intraday Momentum Check ===")
+        skipped = []
+        for symbol in list(result.allocations.keys()):
+            quote = fmp.get_quote(symbol)
+            if quote:
+                prev_close = quote.get("previousClose", 0)
+                current_price = quote.get("price", 0)
+                if prev_close > 0:
+                    intraday_change = (current_price - prev_close) / prev_close
+                    if intraday_change < Config.INTRADAY_MIN_CHANGE:
+                        print(f"  Skipping {symbol}: down {intraday_change:.2%} today (threshold: {Config.INTRADAY_MIN_CHANGE:.0%})")
+                        skipped.append(symbol)
+                        del result.allocations[symbol]
+
+        if skipped and result.allocations:
+            # Redistribute skipped allocations proportionally
+            total_remaining = sum(result.allocations.values())
+            if total_remaining > 0:
+                for sym in result.allocations:
+                    result.allocations[sym] /= total_remaining
+                print(f"  Redistributed allocations among {len(result.allocations)} remaining stocks")
+        elif not result.allocations:
+            print("  All stocks skipped by intraday check. No trades today.")
+            return 0
 
     # Step 4: Execute trades + trailing stops
     print(f"\n=== Executing Buys ({len(result.allocations)} positions) ===")

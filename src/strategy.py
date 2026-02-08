@@ -138,6 +138,14 @@ class GrowthStrategy:
             score += 5
             reasons.append("Earnings accelerating")
 
+        # Post-earnings boost: recent strong beat within EARNINGS_BOOST_DAYS
+        if (stock.days_since_last_earnings is not None
+                and stock.days_since_last_earnings <= Config.EARNINGS_BOOST_DAYS
+                and stock.eps_beat_count is not None
+                and stock.eps_beat_count > 0):
+            score += 5
+            reasons.append(f"Recent earnings beat ({stock.days_since_last_earnings}d ago)")
+
         return ScoredStock(stock=stock, score=score, reasons=reasons)
 
     def screen(
@@ -246,11 +254,32 @@ class GrowthStrategy:
         existing_symbols: set[str] | None = None,
         max_picks: int | None = None,
     ) -> list[ScoredStock]:
-        """Get top stocks to buy."""
+        """Get top stocks to buy.
+
+        Filters out stocks with earnings within EARNINGS_BLACKOUT_DAYS.
+        """
+        from datetime import datetime
+
         existing = existing_symbols or set()
 
         scored = self.screen(existing_symbols=existing)
-        recommendations = scored[:max_picks] if max_picks else scored
+
+        # Earnings blackout filter
+        filtered = []
+        today = datetime.now().date()
+        for s in scored:
+            if s.stock.next_earnings_date:
+                try:
+                    next_date = datetime.strptime(s.stock.next_earnings_date, "%Y-%m-%d").date()
+                    days_until = (next_date - today).days
+                    if 0 <= days_until <= Config.EARNINGS_BLACKOUT_DAYS:
+                        logger.info(f"Skipping {s.stock.symbol}: earnings in {days_until} days")
+                        continue
+                except ValueError:
+                    pass
+            filtered.append(s)
+
+        recommendations = filtered[:max_picks] if max_picks else filtered
 
         logger.info(f"Recommending {len(recommendations)} stocks for purchase")
         return recommendations
