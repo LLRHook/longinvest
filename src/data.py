@@ -40,6 +40,8 @@ class StockData:
     eps_beat_count: int | None = None
     earnings_growth_accelerating: bool | None = None
     revenue_growth_accelerating: bool | None = None
+    next_earnings_date: str | None = None
+    days_since_last_earnings: int | None = None
 
 
 class FMPClient:
@@ -116,19 +118,27 @@ class FMPClient:
         except Exception:
             return []
 
+    def get_earnings_calendar(self, symbol: str) -> list[dict[str, Any]]:
+        """Fetch earnings calendar for a symbol."""
+        try:
+            return self._get("earning-calendar", {"symbol": symbol})
+        except Exception:
+            return []
+
     def get_stock_data(self, symbol: str) -> StockData | None:
         """Fetch and combine all relevant data for a stock.
 
         Fires all 6 API calls concurrently since they are independent.
         """
         try:
-            with ThreadPoolExecutor(max_workers=6) as executor:
+            with ThreadPoolExecutor(max_workers=7) as executor:
                 f_profile = executor.submit(self.get_profile, symbol)
                 f_quote = executor.submit(self.get_quote, symbol)
                 f_ratios = executor.submit(self.get_ratios_ttm, symbol)
                 f_metrics = executor.submit(self.get_key_metrics_ttm, symbol)
                 f_growth = executor.submit(self.get_financial_growth, symbol, 4)
                 f_surprises = executor.submit(self.get_earnings_surprises, symbol)
+                f_earnings_cal = executor.submit(self.get_earnings_calendar, symbol)
 
             profile = f_profile.result()
             if not profile:
@@ -140,6 +150,7 @@ class FMPClient:
             metrics = f_metrics.result()
             growth = f_growth.result()
             surprises = f_surprises.result()
+            earnings_cal = f_earnings_cal.result()
 
             growth_data = growth[0] if growth else {}
 
@@ -188,6 +199,31 @@ class FMPClient:
                 else:
                     revenue = None
 
+            # Earnings calendar: find next and last earnings dates
+            next_earnings_date = None
+            days_since_last_earnings = None
+            today = datetime.now().date()
+            if earnings_cal:
+                future_dates = []
+                past_dates = []
+                for ec in earnings_cal:
+                    date_str = ec.get("date")
+                    if not date_str:
+                        continue
+                    try:
+                        ec_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        if ec_date >= today:
+                            future_dates.append(ec_date)
+                        else:
+                            past_dates.append(ec_date)
+                    except ValueError:
+                        continue
+                if future_dates:
+                    next_earnings_date = min(future_dates).isoformat()
+                if past_dates:
+                    last_earnings = max(past_dates)
+                    days_since_last_earnings = (today - last_earnings).days
+
             return StockData(
                 symbol=symbol,
                 name=profile.get("companyName", ""),
@@ -208,6 +244,8 @@ class FMPClient:
                 eps_beat_count=eps_beat_count,
                 earnings_growth_accelerating=earnings_growth_accelerating,
                 revenue_growth_accelerating=revenue_growth_accelerating,
+                next_earnings_date=next_earnings_date,
+                days_since_last_earnings=days_since_last_earnings,
             )
         except Exception as e:
             logger.error(f"Error fetching data for {symbol}: {e}")

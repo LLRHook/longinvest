@@ -137,6 +137,19 @@ def send_discord_chart_message(
         return False
 
 
+def format_circuit_breaker_embed(
+    reason: str,
+    change_pct: float,
+) -> dict[str, Any]:
+    """Format a circuit breaker alert as a Discord embed."""
+    return {
+        "title": "Circuit Breaker Triggered",
+        "description": f"**Reason:** {reason}\n**Change:** {change_pct:.2%}\n\nTrading halted for the day.",
+        "color": 0xFF0000,
+        "footer": {"text": "Long-term Growth Bot"},
+    }
+
+
 def format_sell_embed(
     symbol: str,
     reason: str,

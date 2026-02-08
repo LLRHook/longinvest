@@ -43,10 +43,26 @@ class Config:
     SMA_TREND_PERIOD: int = 50
     RSI_OVERBOUGHT: float = 75.0
 
+    # Intraday Check
+    INTRADAY_MIN_CHANGE: float = -0.03  # Skip if stock down > 3% today
+    ENABLE_INTRADAY_CHECK: bool = True
+
+    # Circuit Breaker
+    CIRCUIT_BREAKER_PCT: float = -0.05  # Halt if portfolio down > 5% today
+    MARKET_CIRCUIT_BREAKER_PCT: float = -0.03  # Halt if SPY down > 3% today
+
+    # Rebalancing
+    REBALANCE_THRESHOLD: float = 0.05  # Rebalance if position drifts > 5% from target
+    ENABLE_REBALANCING: bool = True
+
     # Risk Management
     TRAILING_STOP_PCT: float = 0.12  # 12% trailing stop
     TRAILING_STOP_TIGHT_PCT: float = 0.08  # 8% for positions up > 20%
     PROFIT_TARGET_TIGHTEN_PCT: float = 0.20  # Threshold to switch to tight stop
+
+    # Earnings Calendar
+    EARNINGS_BLACKOUT_DAYS: int = 5
+    EARNINGS_BOOST_DAYS: int = 10
 
     # Caching
     CACHE_DIR: str = "cache"
