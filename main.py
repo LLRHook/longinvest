@@ -35,7 +35,7 @@ from src.notifier import (
 from src.optimizer import compute_individual_stats, optimize_allocations
 from src.reporter import format_console_report, generate_daily_report
 from src.strategy import GrowthStrategy
-from src.technicals import apply_technical_filters
+from src.technicals import apply_technical_filters, compute_momentum_scores, compute_relative_strength
 from src.tracker import TradeTracker
 
 logging.basicConfig(
@@ -249,7 +249,7 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
 
     print(f"Got {len(prices_df)} days of data for {len(prices_df.columns)} symbols")
 
-    # Step 2b: Technical filters (SMA-200 + RSI)
+    # Step 2b: Technical filters (SMA + RSI)
     print("\n=== Step 2b: Technical Filters ===")
     prices_df, dropped_reasons = apply_technical_filters(prices_df)
     for reason in dropped_reasons:
@@ -258,6 +258,9 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
         print("Error: All stocks filtered out by technical analysis.")
         return 1
     print(f"Passed filters: {len(prices_df.columns)} symbols")
+
+    # Compute momentum scores for optimizer tilt
+    momentum_scores = compute_momentum_scores(prices_df)
 
     # Display per-stock historical performance
     stock_stats = compute_individual_stats(prices_df)
@@ -295,6 +298,7 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
             max_position_pct=Config.MAX_SINGLE_POSITION_PCT,
             sector_map=sector_map,
             max_sector_pct=Config.MAX_SECTOR_ALLOCATION,
+            momentum_scores=momentum_scores,
         )
         if result.allocations:
             cache.save("optimization", opt_cache_key, optimization_result_to_dict(result))
@@ -474,7 +478,7 @@ def cmd_execute(force_refresh: bool = False) -> int:
 
     print(f"Got {len(prices_df)} days of data for {len(prices_df.columns)} symbols")
 
-    # Step 2b: Technical filters (SMA-200 + RSI)
+    # Step 2b: Technical filters (SMA + RSI)
     print("\n=== Step 2b: Technical Filters ===")
     prices_df, dropped_reasons = apply_technical_filters(prices_df)
     for reason in dropped_reasons:
@@ -483,6 +487,9 @@ def cmd_execute(force_refresh: bool = False) -> int:
         print("Error: All stocks filtered out by technical analysis.")
         return 1
     print(f"Passed filters: {len(prices_df.columns)} symbols")
+
+    # Compute momentum scores for optimizer tilt
+    momentum_scores = compute_momentum_scores(prices_df)
 
     # Step 3: Optimize allocations (with caching)
     print("\n=== Step 3: Portfolio Optimization ===")
@@ -509,6 +516,7 @@ def cmd_execute(force_refresh: bool = False) -> int:
             max_position_pct=Config.MAX_SINGLE_POSITION_PCT,
             sector_map=sector_map,
             max_sector_pct=Config.MAX_SECTOR_ALLOCATION,
+            momentum_scores=momentum_scores,
         )
         if result.allocations:
             cache.save("optimization", opt_cache_key, optimization_result_to_dict(result))
