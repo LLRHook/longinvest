@@ -161,6 +161,7 @@ def optimize_allocations(
     max_position_pct: float | None = None,
     sector_map: dict[str, str] | None = None,
     max_sector_pct: float | None = None,
+    momentum_scores: dict[str, float] | None = None,
 ) -> OptimizationResult:
     """Optimize portfolio allocations to maximize Sharpe ratio.
 
@@ -170,6 +171,7 @@ def optimize_allocations(
         max_position_pct: Max allocation per single position (e.g. 0.15 for 15%)
         sector_map: Optional mapping of symbol -> sector name
         max_sector_pct: Max combined allocation per sector (e.g. 0.40 for 40%)
+        momentum_scores: Optional dict of {symbol: score (0-100)} for momentum tilt
 
     Returns:
         OptimizationResult with allocations, Sharpe ratio, and other stats
@@ -243,6 +245,21 @@ def optimize_allocations(
         allocs = init_allocs
 
     allocs = apply_minimum_threshold(allocs, min_allocation)
+
+    # Apply momentum tilt after Sharpe optimization
+    if momentum_scores:
+        from config import Config
+        tilt_factor = Config.MOMENTUM_TILT_FACTOR
+        for i, sym in enumerate(symbols):
+            if sym in momentum_scores and allocs[i] > 0:
+                # Normalize momentum score from 0-100 to -1..+1 range
+                normalized = (momentum_scores[sym] - 50) / 50
+                allocs[i] *= (1 + tilt_factor * normalized)
+        # Ensure non-negative and re-normalize
+        allocs = np.clip(allocs, 0.0, None)
+        total = allocs.sum()
+        if total > 0:
+            allocs = allocs / total
 
     # Apply position cap as post-processing safety net
     if max_position_pct:

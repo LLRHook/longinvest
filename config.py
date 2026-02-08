@@ -42,6 +42,7 @@ class Config:
     # Technical Filters
     SMA_TREND_PERIOD: int = 50
     RSI_OVERBOUGHT: float = 75.0
+    MOMENTUM_TILT_FACTOR: float = 0.20
 
     # Intraday Check
     INTRADAY_MIN_CHANGE: float = -0.03  # Skip if stock down > 3% today

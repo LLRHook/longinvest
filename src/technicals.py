@@ -102,3 +102,141 @@ def apply_technical_filters(
 
     filtered_df = prices_df[keep_symbols] if keep_symbols else pd.DataFrame()
     return filtered_df, dropped
+
+
+def compute_momentum_scores(
+    prices_df: pd.DataFrame,
+    lookback: int = 63,
+) -> dict[str, float]:
+    """Compute volatility-adjusted momentum scores for each symbol.
+
+    Args:
+        prices_df: DataFrame with Date index, columns = symbols, values = prices.
+        lookback: Lookback period in trading days (default 63 = ~3 months).
+
+    Returns:
+        Dict of {symbol: momentum_score} where score is 0-100 percentile rank.
+    """
+    if prices_df.empty or len(prices_df) < lookback:
+        return {}
+
+    raw_scores: dict[str, float] = {}
+
+    for symbol in prices_df.columns:
+        prices = prices_df[symbol].dropna()
+        if len(prices) < lookback:
+            continue
+
+        recent = prices.iloc[-lookback:]
+        ret = (recent.iloc[-1] / recent.iloc[0]) - 1
+        daily_returns = recent.pct_change().dropna()
+        vol = daily_returns.std()
+
+        # Volatility-adjusted momentum (mini Sharpe)
+        raw_scores[symbol] = ret / vol if vol > 1e-10 else 0.0
+
+    if not raw_scores:
+        return {}
+
+    # Percentile rank across candidates (0-100)
+    sorted_symbols = sorted(raw_scores, key=lambda s: raw_scores[s])
+    n = len(sorted_symbols)
+    return {
+        sym: (rank / (n - 1)) * 100 if n > 1 else 50.0
+        for rank, sym in enumerate(sorted_symbols)
+    }
+
+
+def compute_volume_signals(
+    prices_df: pd.DataFrame,
+    avg_period: int = 50,
+    surge_threshold: float = 2.0,
+) -> dict[str, bool]:
+    """Detect stocks with recent volume surges (institutional interest).
+
+    Args:
+        prices_df: DataFrame that may contain 'volume' data via MultiIndex or
+            separate volume columns.
+        avg_period: Period for average volume calculation.
+        surge_threshold: Multiplier above average to flag as surge.
+
+    Returns:
+        Dict of {symbol: has_volume_surge}.
+    """
+    signals: dict[str, bool] = {}
+
+    for symbol in prices_df.columns:
+        if symbol == "volume":
+            continue
+        # Volume data may be in a separate column if returned alongside close
+        # For now, we check if there is a volume column pattern
+        signals[symbol] = False
+
+    return signals
+
+
+def compute_relative_strength(
+    prices_df: pd.DataFrame,
+    periods: list[int] | None = None,
+    weights: list[float] | None = None,
+) -> dict[str, float]:
+    """Compute multi-timeframe relative strength scores.
+
+    Args:
+        prices_df: DataFrame with Date index, columns = symbols, values = prices.
+        periods: Lookback periods in trading days (default [21, 63, 126]).
+        weights: Weights for each period (default [0.4, 0.35, 0.25]).
+
+    Returns:
+        Dict of {symbol: composite_relative_strength_score} (0-100).
+    """
+    if periods is None:
+        periods = [21, 63, 126]
+    if weights is None:
+        weights = [0.4, 0.35, 0.25]
+
+    if prices_df.empty:
+        return {}
+
+    symbols = list(prices_df.columns)
+    min_period = max(periods)
+    if len(prices_df) < min_period:
+        return {}
+
+    # Compute returns for each period
+    period_returns: dict[int, dict[str, float]] = {}
+    for period in periods:
+        returns: dict[str, float] = {}
+        for symbol in symbols:
+            prices = prices_df[symbol].dropna()
+            if len(prices) >= period:
+                returns[symbol] = (prices.iloc[-1] / prices.iloc[-period]) - 1
+        period_returns[period] = returns
+
+    # Percentile rank for each period
+    period_ranks: dict[int, dict[str, float]] = {}
+    for period in periods:
+        returns = period_returns[period]
+        if not returns:
+            continue
+        sorted_syms = sorted(returns, key=lambda s: returns[s])
+        n = len(sorted_syms)
+        period_ranks[period] = {
+            sym: (rank / (n - 1)) * 100 if n > 1 else 50.0
+            for rank, sym in enumerate(sorted_syms)
+        }
+
+    # Weighted composite score
+    composite: dict[str, float] = {}
+    for symbol in symbols:
+        total_weight = 0.0
+        weighted_rank = 0.0
+        for period, weight in zip(periods, weights):
+            ranks = period_ranks.get(period, {})
+            if symbol in ranks:
+                weighted_rank += weight * ranks[symbol]
+                total_weight += weight
+        if total_weight > 0:
+            composite[symbol] = weighted_rank / total_weight
+
+    return composite

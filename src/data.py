@@ -314,7 +314,10 @@ class FMPClient:
             df["date"] = pd.to_datetime(df["date"])
             df = df.set_index("date").sort_index()
 
-            return df[["close"]]
+            cols = ["close"]
+            if "volume" in df.columns:
+                cols.append("volume")
+            return df[cols]
 
         except Exception as e:
             logger.error(f"Error fetching historical prices for {symbol}: {e}")
