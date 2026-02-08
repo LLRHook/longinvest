@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest, TrailingStopOrderRequest
+from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
+from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, TrailingStopOrderRequest
 
 from config import Config
 
@@ -161,6 +161,31 @@ class AlpacaBroker:
         except Exception as e:
             logger.error(f"Failed to place trailing stop for {symbol}: {e}")
             return None
+
+    def get_open_orders(self, symbol: str) -> list:
+        """List open orders for a symbol."""
+        try:
+            request = GetOrdersRequest(
+                status=QueryOrderStatus.OPEN,
+                symbols=[symbol],
+            )
+            return self.client.get_orders(request)
+        except Exception as e:
+            logger.error(f"Failed to get open orders for {symbol}: {e}")
+            return []
+
+    def cancel_open_orders(self, symbol: str) -> int:
+        """Cancel all open orders for a symbol. Returns count of cancelled orders."""
+        orders = self.get_open_orders(symbol)
+        cancelled = 0
+        for order in orders:
+            try:
+                self.client.cancel_order_by_id(order.id)
+                cancelled += 1
+                logger.info(f"Cancelled order {order.id} for {symbol}")
+            except Exception as e:
+                logger.error(f"Failed to cancel order {order.id} for {symbol}: {e}")
+        return cancelled
 
     def get_held_symbols(self) -> set[str]:
         """Return set of symbols currently held."""

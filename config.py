@@ -18,10 +18,17 @@ class Config:
     FMP_API_KEY: str = os.getenv("FMP_API_KEY", "")
     FMP_BASE_URL: str = "https://financialmodelingprep.com/stable"
     FMP_RATE_LIMIT_MS: int = 200  # Starter tier: 300 calls/min
+    FMP_MAX_CONCURRENT: int = 20
 
     # Strategy
     MIN_MARKET_CAP: float = 300_000_000  # $300M (small cap)
     MAX_MARKET_CAP: float = 2_000_000_000  # $2B (small cap ceiling)
+
+    # Guardrails
+    MAX_DE_RATIO: float = 3.0
+    MIN_REVENUE_GROWTH: float = -0.10  # Allow 10% decline
+    REQUIRE_POSITIVE_FCF: bool = False
+    MIN_REVENUE: float = 10_000_000  # $10M minimum revenue
 
     # Portfolio Optimization
     INVESTMENT_BUDGET: float = 5000.0
@@ -37,7 +44,9 @@ class Config:
     RSI_OVERBOUGHT: float = 75.0
 
     # Risk Management
-    TRAILING_STOP_PCT: float = 0.20  # 20% trailing stop
+    TRAILING_STOP_PCT: float = 0.12  # 12% trailing stop
+    TRAILING_STOP_TIGHT_PCT: float = 0.08  # 8% for positions up > 20%
+    PROFIT_TARGET_TIGHTEN_PCT: float = 0.20  # Threshold to switch to tight stop
 
     # Caching
     CACHE_DIR: str = "cache"
