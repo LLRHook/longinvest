@@ -118,6 +118,41 @@ class FMPClient:
         except Exception:
             return []
 
+    def get_batch_quotes(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        """Fetch quotes for multiple symbols in one API call.
+
+        FMP quote endpoint supports comma-separated symbols.
+        Returns dict of {symbol: quote_data}.
+        """
+        if not symbols:
+            return {}
+        symbol_str = ",".join(symbols)
+        try:
+            result = self._get("quote", {"symbol": symbol_str})
+            if not result:
+                return {}
+            return {item["symbol"]: item for item in result if "symbol" in item}
+        except Exception as e:
+            logger.error(f"Batch quote failed: {e}")
+            return {}
+
+    def get_batch_profiles(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        """Fetch profiles for multiple symbols in one API call.
+
+        Returns dict of {symbol: profile_data}.
+        """
+        if not symbols:
+            return {}
+        symbol_str = ",".join(symbols)
+        try:
+            result = self._get("profile", {"symbol": symbol_str})
+            if not result:
+                return {}
+            return {item["symbol"]: item for item in result if "symbol" in item}
+        except Exception as e:
+            logger.error(f"Batch profile failed: {e}")
+            return {}
+
     def get_earnings_calendar(self, symbol: str) -> list[dict[str, Any]]:
         """Fetch earnings calendar for a symbol."""
         try:

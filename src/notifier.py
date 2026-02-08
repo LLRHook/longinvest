@@ -137,6 +137,57 @@ def send_discord_chart_message(
         return False
 
 
+def format_screening_embed(
+    recommendations: list,
+    max_display: int = 5,
+) -> dict[str, Any]:
+    """Format top screening picks as a Discord embed.
+
+    Args:
+        recommendations: List of ScoredStock objects.
+        max_display: Number of top picks to show.
+
+    Returns:
+        Discord embed dict.
+    """
+    lines = []
+    for i, rec in enumerate(recommendations[:max_display], 1):
+        lines.append(
+            f"**{i}. {rec.stock.symbol}** - Score: {rec.score:.1f} "
+            f"| ${rec.stock.price:.2f} | MCap: ${rec.stock.market_cap / 1e9:.1f}B"
+        )
+    description = "\n".join(lines) if lines else "No recommendations."
+    return {
+        "title": f"Screening Results - Top {min(max_display, len(recommendations))} Picks",
+        "description": description,
+        "color": 0x3B82F6,  # Blue
+        "footer": {"text": "Long-term Growth Bot"},
+    }
+
+
+def format_rebalance_embed(
+    trimmed: list[tuple[str, float, float]],
+) -> dict[str, Any]:
+    """Format rebalancing actions as a Discord embed.
+
+    Args:
+        trimmed: List of (symbol, old_pct, new_pct) tuples.
+
+    Returns:
+        Discord embed dict.
+    """
+    lines = []
+    for symbol, old_pct, trim_amount in trimmed:
+        lines.append(f"**{symbol}**: {old_pct:.1%} -> trimmed ${trim_amount:,.2f}")
+    description = "\n".join(lines) if lines else "No rebalancing needed."
+    return {
+        "title": "Portfolio Rebalanced",
+        "description": description,
+        "color": 0xFF8C00,  # Orange
+        "footer": {"text": "Long-term Growth Bot"},
+    }
+
+
 def format_circuit_breaker_embed(
     reason: str,
     change_pct: float,
