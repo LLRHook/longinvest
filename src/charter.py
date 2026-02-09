@@ -70,17 +70,12 @@ def fetch_benchmark_history(
 
 def calculate_cumulative_returns(
     portfolio_df: pd.DataFrame, benchmark_df: pd.DataFrame,
-    cash_balance: float = 0.0,
 ) -> pd.DataFrame | None:
     """Calculate cumulative % returns for portfolio and benchmark.
 
     Both series are normalized to 0% at the first common date.
-
-    Args:
-        portfolio_df: DataFrame with 'equity' column (total equity including cash).
-        benchmark_df: DataFrame with 'close' column (benchmark prices).
-        cash_balance: Current cash balance to subtract from equity. This gives
-            returns based on invested capital rather than total portfolio value.
+    Uses total portfolio equity (including cash) since Alpaca does not provide
+    historical cash breakdowns needed for invested-capital-only returns.
 
     Returns:
         DataFrame with 'portfolio' and 'spy' columns (cumulative % return),
@@ -102,13 +97,6 @@ def calculate_cumulative_returns(
         return None
 
     logger.debug(f"Combined chart data: {combined.index[0]} to {combined.index[-1]} ({len(combined)} rows)")
-
-    # Subtract cash to get invested-capital equity (positions only)
-    if cash_balance > 0:
-        combined["equity"] = combined["equity"] - cash_balance
-        # Ensure no negative values (cash may have been lower historically)
-        combined["equity"] = combined["equity"].clip(lower=1.0)
-        logger.debug(f"Subtracted ${cash_balance:,.2f} cash from equity for invested-capital returns")
 
     initial_equity = combined["equity"].iloc[0]
     initial_spy = combined["close"].iloc[0]
@@ -179,14 +167,8 @@ def generate_performance_chart(perf_data: pd.DataFrame) -> BytesIO:
 
 def generate_performance_chart_image(
     broker: AlpacaBroker, fmp: FMPClient,
-    cash_balance: float = 0.0,
 ) -> BytesIO | None:
     """Orchestrate chart generation: fetch data, compute returns, render chart.
-
-    Args:
-        broker: Alpaca broker instance.
-        fmp: FMP client instance.
-        cash_balance: Current cash to subtract from equity for invested-capital returns.
 
     Returns:
         BytesIO containing PNG image, or None if generation fails.
@@ -205,9 +187,7 @@ def generate_performance_chart_image(
             logger.warning("No benchmark history available for chart")
             return None
 
-        perf_data = calculate_cumulative_returns(
-            portfolio_df, benchmark_df, cash_balance=cash_balance,
-        )
+        perf_data = calculate_cumulative_returns(portfolio_df, benchmark_df)
         if perf_data is None:
             return None
 

@@ -62,10 +62,6 @@ def cmd_report(dry_run: bool = False) -> int:
     broker = AlpacaBroker()
     fmp = FMPClient()
 
-    # Get current account status for cash balance
-    status = broker.get_account_status()
-    cash_balance = status.cash
-
     # Fetch portfolio + benchmark history once (shared by reporter and charter)
     portfolio_df = fetch_portfolio_history(broker)
     benchmark_df = None
@@ -82,13 +78,11 @@ def cmd_report(dry_run: bool = False) -> int:
     # Always show console output
     print(format_console_report(report))
 
-    # Generate performance chart from pre-fetched data (invested capital only)
+    # Generate performance chart from pre-fetched data
     print("Generating performance chart...")
     chart_image = None
     if portfolio_df is not None and benchmark_df is not None:
-        perf_data = calculate_cumulative_returns(
-            portfolio_df, benchmark_df, cash_balance=cash_balance,
-        )
+        perf_data = calculate_cumulative_returns(portfolio_df, benchmark_df)
         if perf_data is not None:
             chart_image = generate_performance_chart(perf_data)
     if chart_image:
