@@ -284,8 +284,10 @@ def format_performance_embed(report_data: dict[str, Any]) -> dict[str, Any]:
     out_emoji = "✅" if outperformance >= 0 else "❌"
 
     # Build description
+    invested = portfolio.get("invested", portfolio["value"])
     description_lines = [
-        f"**Portfolio Value:** ${portfolio['value']:,.2f} ({pl_sign}${daily_pl:,.2f} | {pct_sign}{daily_pl_pct:.2%})",
+        f"**Invested:** ${invested:,.2f} ({pl_sign}${daily_pl:,.2f} | {pct_sign}{daily_pl_pct:.2%})",
+        f"**Cash:** ${portfolio['cash']:,.2f} | **Total:** ${portfolio['value']:,.2f}",
         f"**S&P 500 (SPY):** {bench_sign}{benchmark['daily_change_pct']:.2%}",
         f"**vs Benchmark:** {out_sign}{outperformance:.2%} {out_emoji}",
     ]

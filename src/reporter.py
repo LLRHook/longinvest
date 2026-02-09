@@ -188,9 +188,12 @@ def generate_daily_report(
 
     status = broker.get_account_status()
 
-    # Calculate daily P/L from Alpaca's last_equity
-    daily_pl = status.portfolio_value - status.last_equity
-    daily_pl_pct = daily_pl / status.last_equity if status.last_equity > 0 else 0.0
+    # Calculate daily P/L from positions only (exclude cash drag)
+    total_intraday_pl = sum(p.unrealized_intraday_pl for p in status.positions)
+    positions_value = sum(p.market_value for p in status.positions)
+    yesterday_positions_value = positions_value - total_intraday_pl
+    daily_pl = total_intraday_pl
+    daily_pl_pct = daily_pl / yesterday_positions_value if yesterday_positions_value > 0 else 0.0
 
     # Get benchmark return
     benchmark_return = get_benchmark_daily_return(fmp, "SPY")
@@ -217,9 +220,6 @@ def generate_daily_report(
             "intraday_plpc": p.unrealized_intraday_plpc,
         })
 
-    # Calculate total intraday P/L from positions (should match daily_pl)
-    total_intraday_pl = sum(p.unrealized_intraday_pl for p in status.positions)
-
     # Compute risk metrics from portfolio history
     risk_metrics = {}
     if portfolio_df is not None and not portfolio_df.empty:
@@ -237,6 +237,7 @@ def generate_daily_report(
         "portfolio": {
             "value": status.portfolio_value,
             "cash": status.cash,
+            "invested": positions_value,
             "last_equity": status.last_equity,
             "daily_pl": daily_pl,
             "daily_pl_pct": daily_pl_pct,
@@ -281,9 +282,9 @@ def format_console_report(report: dict[str, Any]) -> str:
         f"=== Daily Portfolio Report - {report['date']} ===",
         "",
         f"Portfolio Value: ${portfolio['value']:,.2f}",
-        f"  Yesterday:     ${portfolio['last_equity']:,.2f}",
-        f"  Today's P/L:   {pl_sign}${portfolio['daily_pl']:,.2f} ({pct_sign}{portfolio['daily_pl_pct']:.2%})",
+        f"  Invested:      ${portfolio['invested']:,.2f}",
         f"  Cash:          ${portfolio['cash']:,.2f}",
+        f"  Today's P/L:   {pl_sign}${portfolio['daily_pl']:,.2f} ({pct_sign}{portfolio['daily_pl_pct']:.2%}) [on invested]",
         "",
         f"S&P 500 (SPY):   {'+' if benchmark['daily_change_pct'] >= 0 else ''}{benchmark['daily_change_pct']:.2%}",
         f"vs Benchmark:    {'+' if summary['outperformance'] >= 0 else ''}{summary['outperformance']:.2%} {'[OK]' if summary['outperformance'] >= 0 else '[BEHIND]'}",
