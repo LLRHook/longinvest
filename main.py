@@ -62,6 +62,10 @@ def cmd_report(dry_run: bool = False) -> int:
     broker = AlpacaBroker()
     fmp = FMPClient()
 
+    # Get current account status for cash balance
+    status = broker.get_account_status()
+    cash_balance = status.cash
+
     # Fetch portfolio + benchmark history once (shared by reporter and charter)
     portfolio_df = fetch_portfolio_history(broker)
     benchmark_df = None
@@ -78,11 +82,13 @@ def cmd_report(dry_run: bool = False) -> int:
     # Always show console output
     print(format_console_report(report))
 
-    # Generate performance chart from pre-fetched data
+    # Generate performance chart from pre-fetched data (invested capital only)
     print("Generating performance chart...")
     chart_image = None
     if portfolio_df is not None and benchmark_df is not None:
-        perf_data = calculate_cumulative_returns(portfolio_df, benchmark_df)
+        perf_data = calculate_cumulative_returns(
+            portfolio_df, benchmark_df, cash_balance=cash_balance,
+        )
         if perf_data is not None:
             chart_image = generate_performance_chart(perf_data)
     if chart_image:
@@ -564,28 +570,50 @@ def cmd_execute(force_refresh: bool = False) -> int:
 
     for symbol, pct in sorted(result.allocations.items(), key=lambda x: -x[1]):
         amount = Config.INVESTMENT_BUDGET * pct
-        print(f"\nBuying {symbol}: {pct:.1%} = ${amount:,.2f}...")
-        order_id = broker.buy_notional(symbol, amount)
+        stock = next((r.stock for r in recommendations if r.stock.symbol == symbol), None)
+        price = stock.price if stock else 0
+
+        # Check if asset supports fractional shares
+        fractionable = broker.is_fractionable(symbol)
+
+        if fractionable:
+            print(f"\nBuying {symbol}: {pct:.1%} = ${amount:,.2f}...")
+            order_id = broker.buy_notional(symbol, amount)
+        else:
+            # Non-fractionable: buy whole shares only
+            if price <= 0:
+                print(f"\nSkipping {symbol}: no price available for whole-share calculation")
+                continue
+            whole_qty = int(amount // price)
+            if whole_qty < 1:
+                print(f"\nSkipping {symbol}: ${amount:,.2f} < 1 share at ${price:.2f}")
+                continue
+            actual_amount = whole_qty * price
+            print(f"\nBuying {symbol}: {whole_qty} shares (~${actual_amount:,.2f}, non-fractionable)...")
+            order_id = broker.buy_qty(symbol, whole_qty)
+
         if order_id:
             print(f"  Order placed: {order_id}")
             orders_placed += 1
 
             # Record buy
-            stock = next((r.stock for r in recommendations if r.stock.symbol == symbol), None)
-            price = stock.price if stock else 0
             qty_est = amount / price if price > 0 else 0
             tracker.record_buy(symbol=symbol, price=price, quantity=qty_est)
 
-            # Place trailing stop
-            if Config.TRAILING_STOP_PCT > 0 and qty_est > 0:
+            # Place trailing stop using actual position qty
+            if Config.TRAILING_STOP_PCT > 0:
                 time.sleep(1)  # Brief pause for order fill
-                stop_id = broker.place_trailing_stop(
-                    symbol, qty_est, Config.TRAILING_STOP_PCT * 100,
-                )
-                if stop_id:
-                    print(f"  Trailing stop ({Config.TRAILING_STOP_PCT:.0%}): {stop_id}")
+                position = broker.get_position(symbol)
+                if position and float(position.qty) > 0:
+                    stop_id = broker.place_trailing_stop(
+                        symbol, float(position.qty), Config.TRAILING_STOP_PCT * 100,
+                    )
+                    if stop_id:
+                        print(f"  Trailing stop ({Config.TRAILING_STOP_PCT:.0%}): {stop_id}")
+                    else:
+                        print(f"  Warning: Trailing stop failed for {symbol}")
                 else:
-                    print(f"  Warning: Trailing stop failed for {symbol}")
+                    print(f"  Warning: Could not get position for trailing stop")
         else:
             print(f"  Order FAILED")
 

@@ -1,4 +1,5 @@
 import logging
+import math
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -75,8 +76,20 @@ class AlpacaBroker:
             ],
         )
 
+    def is_fractionable(self, symbol: str) -> bool:
+        """Check if an asset supports fractional share trading."""
+        try:
+            asset = self.client.get_asset(symbol)
+            return asset.fractionable
+        except Exception as e:
+            logger.warning(f"Could not check fractionability for {symbol}, assuming False: {e}")
+            return False
+
     def buy_notional(self, symbol: str, notional: float) -> str | None:
-        """Place a market buy order for a dollar amount (fractional shares)."""
+        """Place a market buy order for a dollar amount (fractional shares).
+
+        Only works for fractionable assets. Use buy_qty for non-fractionable assets.
+        """
         try:
             notional = round(notional, 2)
             order_request = MarketOrderRequest(
@@ -87,6 +100,22 @@ class AlpacaBroker:
             )
             order = self.client.submit_order(order_request)
             logger.info(f"Buy order placed: {symbol} for ${notional:.2f}, order_id={order.id}")
+            return str(order.id)
+        except Exception as e:
+            logger.error(f"Failed to place buy order for {symbol}: {e}")
+            return None
+
+    def buy_qty(self, symbol: str, qty: int) -> str | None:
+        """Place a market buy order for a whole number of shares."""
+        try:
+            order_request = MarketOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.DAY,
+            )
+            order = self.client.submit_order(order_request)
+            logger.info(f"Buy order placed: {symbol} for {qty} shares, order_id={order.id}")
             return str(order.id)
         except Exception as e:
             logger.error(f"Failed to place buy order for {symbol}: {e}")
@@ -140,7 +169,10 @@ class AlpacaBroker:
             return None
 
     def place_trailing_stop(self, symbol: str, qty: float, trail_percent: float) -> str | None:
-        """Place a trailing stop sell order (GTC).
+        """Place a trailing stop sell order.
+
+        Uses GTC for whole-share quantities and DAY for fractional quantities,
+        since Alpaca requires fractional orders to be DAY orders.
 
         Args:
             symbol: Stock symbol
@@ -148,15 +180,17 @@ class AlpacaBroker:
             trail_percent: Trail percentage (e.g. 20.0 for 20%)
         """
         try:
+            is_whole = qty == math.floor(qty)
+            tif = TimeInForce.GTC if is_whole else TimeInForce.DAY
             order_request = TrailingStopOrderRequest(
                 symbol=symbol,
                 qty=qty,
                 side=OrderSide.SELL,
-                time_in_force=TimeInForce.GTC,
+                time_in_force=tif,
                 trail_percent=str(trail_percent),
             )
             order = self.client.submit_order(order_request)
-            logger.info(f"Trailing stop placed: {symbol}, qty={qty}, trail={trail_percent}%, order_id={order.id}")
+            logger.info(f"Trailing stop placed: {symbol}, qty={qty}, trail={trail_percent}%, tif={tif.value}, order_id={order.id}")
             return str(order.id)
         except Exception as e:
             logger.error(f"Failed to place trailing stop for {symbol}: {e}")
