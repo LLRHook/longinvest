@@ -14,7 +14,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 class CacheManager:
@@ -27,7 +27,7 @@ class CacheManager:
 
     def _ensure_dirs(self) -> None:
         """Create cache directory structure."""
-        categories = ["screener", "fundamentals", "scored", "prices", "optimization"]
+        categories = ["screener", "fundamentals", "scored", "prices"]
         for category in categories:
             (self.cache_dir / category).mkdir(parents=True, exist_ok=True)
 
@@ -152,8 +152,15 @@ def dict_to_stock_data(d: dict[str, Any]) -> Any:
     from src.data import StockData
     # Provide defaults for new optional fields not present in old caches
     d.setdefault("revenue", None)
+    d.setdefault("pe_ratio", None)
+    d.setdefault("peg_ratio", None)
+    d.setdefault("price_to_book", None)
+    d.setdefault("ev_to_ebitda", None)
+    d.setdefault("enterprise_value", None)
+    d.setdefault("fcf_margin", None)
     d.setdefault("earnings_growth", None)
     d.setdefault("eps_beat_count", None)
+    d.setdefault("quarterly_eps_values", None)
     d.setdefault("earnings_growth_accelerating", None)
     d.setdefault("revenue_growth_accelerating", None)
     d.setdefault("next_earnings_date", None)
@@ -178,17 +185,6 @@ def dict_to_scored_stock(d: dict[str, Any]) -> Any:
         score=d["score"],
         reasons=d["reasons"],
     )
-
-
-def optimization_result_to_dict(result: Any) -> dict[str, Any]:
-    """Convert OptimizationResult to dict."""
-    return asdict(result)
-
-
-def dict_to_optimization_result(d: dict[str, Any]) -> Any:
-    """Convert dict back to OptimizationResult."""
-    from src.optimizer import OptimizationResult
-    return OptimizationResult(**d)
 
 
 def dataframe_to_dict(df: pd.DataFrame) -> dict[str, Any]:
