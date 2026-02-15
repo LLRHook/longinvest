@@ -247,6 +247,51 @@ def format_sell_embed(
     }
 
 
+def format_dca_buy_embed(
+    symbol: str,
+    name: str,
+    score: float,
+    amount: float,
+    price: float,
+    sector: str,
+    reasons: list[str],
+    position_count: int,
+) -> dict[str, Any]:
+    """Format a DCA daily buy notification as a Discord embed.
+
+    Args:
+        symbol: Stock symbol bought
+        name: Company name
+        score: Multi-factor score (0-100)
+        amount: Dollar amount invested
+        price: Price at purchase
+        sector: Stock sector
+        reasons: List of scoring reasons
+        position_count: Total positions after buy
+
+    Returns:
+        Discord embed dict
+    """
+    reason_lines = "\n".join(f"- {r}" for r in reasons[:6]) if reasons else "N/A"
+
+    description_lines = [
+        f"**Symbol:** {symbol} ({name})",
+        f"**Score:** {score:.1f}/100",
+        f"**Amount:** ${amount:,.2f} @ ${price:.2f}",
+        f"**Sector:** {sector}",
+        f"**Positions:** {position_count}",
+        "",
+        f"**Scoring Factors:**\n{reason_lines}",
+    ]
+
+    return {
+        "title": f"DCA Buy - {symbol}",
+        "description": "\n".join(description_lines),
+        "color": 0x22C55E,  # Green
+        "footer": {"text": "Multi-Factor DCA Bot"},
+    }
+
+
 def format_performance_embed(report_data: dict[str, Any]) -> dict[str, Any]:
     """Format report data into a Discord embed.
 
