@@ -215,29 +215,27 @@ class MultiFactorStrategy:
 
         return len(failures) == 0, failures
 
-    def screen(
+    def _get_passing_stocks(
         self,
         existing_symbols: set[str] | None = None,
-        momentum_signals: dict[str, float] | None = None,
-    ) -> list[ScoredStock]:
-        """Run the full screening process with z-score batch scoring.
+    ) -> list[StockData]:
+        """Fetch fundamentals and filter through guardrails. Results are cached.
 
-        Args:
-            existing_symbols: Symbols to exclude (already held).
-            momentum_signals: Optional {symbol: raw_return} from 12-1 momentum.
+        This is the expensive step (API calls). Scoring is done separately
+        so momentum signals can be applied without re-fetching.
         """
         existing = existing_symbols or set()
 
-        # Try to load cached scored results first
+        # Try to load cached passing stocks
         if self.cache and not self.force_refresh:
             date_key = self.cache.get_date_key()
-            cached_scored = self.cache.load("scored", f"scored_{date_key}")
-            if cached_scored:
-                scored_stocks = [dict_to_scored_stock(s) for s in cached_scored]
-                scored_stocks = [s for s in scored_stocks if s.stock.symbol not in existing]
-                print(f"  Using cached screening results ({len(scored_stocks)} stocks)")
-                logger.info(f"Loaded {len(scored_stocks)} scored stocks from cache")
-                return scored_stocks
+            cached = self.cache.load("scored", f"passing_{date_key}")
+            if cached:
+                stocks = [dict_to_stock_data(s) for s in cached]
+                stocks = [s for s in stocks if s.symbol not in existing]
+                print(f"  Using cached passing stocks ({len(stocks)} stocks)")
+                logger.info(f"Loaded {len(stocks)} passing stocks from cache")
+                return stocks
 
         # Get screener candidates (with caching)
         candidates = self._get_cached_screener_candidates()
@@ -263,18 +261,37 @@ class MultiFactorStrategy:
             passing_stocks.append(stock_data)
             print("pass")
 
-        # Batch z-score scoring across all passing stocks
+        logger.info(f"Screening complete: {len(passing_stocks)} stocks passed guardrails")
+
+        # Cache the passing stocks (fundamentals only, not scores)
+        if self.cache:
+            date_key = self.cache.get_date_key()
+            cached_data = [stock_data_to_dict(s) for s in passing_stocks]
+            self.cache.save("scored", f"passing_{date_key}", cached_data)
+
+        return passing_stocks
+
+    def screen(
+        self,
+        existing_symbols: set[str] | None = None,
+        momentum_signals: dict[str, float] | None = None,
+    ) -> list[ScoredStock]:
+        """Run the full screening process with z-score batch scoring.
+
+        Fundamentals are cached; scoring is always fresh so momentum
+        signals are included.
+
+        Args:
+            existing_symbols: Symbols to exclude (already held).
+            momentum_signals: Optional {symbol: raw_return} from 12-1 momentum.
+        """
+        passing_stocks = self._get_passing_stocks(existing_symbols)
+
+        # Always score fresh (momentum may differ between calls)
         scored_stocks = score_universe(passing_stocks, momentum_signals)
-        logger.info(f"Screening complete: {len(scored_stocks)} stocks scored")
 
         for s in scored_stocks[:10]:
             print(f"  {s.stock.symbol}: {s.score:.1f}")
-
-        # Cache the scored results
-        if self.cache:
-            date_key = self.cache.get_date_key()
-            cached_data = [scored_stock_to_dict(s) for s in scored_stocks]
-            self.cache.save("scored", f"scored_{date_key}", cached_data)
 
         return scored_stocks
 
