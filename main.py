@@ -174,6 +174,7 @@ def _fetch_momentum_signals(fmp: FMPClient, symbols: list[str], cache: CacheMana
         cached_prices = cache.load("prices", prices_cache_key)
         if cached_prices:
             prices_df = dict_to_dataframe(cached_prices)
+            print(f"  Using cached prices ({len(prices_df)} days, {len(prices_df.columns)} symbols)")
 
     if prices_df is None:
         end_date = datetime.now()
@@ -181,17 +182,24 @@ def _fetch_momentum_signals(fmp: FMPClient, symbols: list[str], cache: CacheMana
         from_str = start_date.strftime("%Y-%m-%d")
         to_str = end_date.strftime("%Y-%m-%d")
 
+        print(f"  Fetching prices for {len(symbols)} symbols ({from_str} to {to_str})...")
         prices_df = fmp.get_historical_prices_batch(
             symbols, from_str, to_str, Config.MIN_HISTORICAL_DAYS
         )
 
         if not prices_df.empty:
             cache.save("prices", prices_cache_key, dataframe_to_dict(prices_df))
+            print(f"  Got {len(prices_df)} days for {len(prices_df.columns)} symbols")
+        else:
+            print("  No price data returned")
 
     if prices_df.empty:
         return {}
 
-    return compute_price_momentum_12_1(prices_df)
+    signals = compute_price_momentum_12_1(prices_df)
+    if not signals:
+        print(f"  Momentum: need 273 trading days, have {len(prices_df)} — insufficient history")
+    return signals
 
 
 def cmd_screen(force_refresh: bool = False) -> int:
