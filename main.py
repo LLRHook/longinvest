@@ -203,7 +203,15 @@ def cmd_screen(force_refresh: bool = False) -> int:
     print("\n=== Running Multi-Factor Screener ===")
     if force_refresh:
         print("(forcing fresh data)")
-    scored = strategy.screen()
+
+    # Get passing stocks, compute momentum, then score
+    passing_stocks = strategy._get_passing_stocks()
+    symbols = [s.symbol for s in passing_stocks[:Config.OPTIMIZER_CANDIDATES]]
+    momentum = _fetch_momentum_signals(fmp, symbols, cache, force_refresh)
+    if momentum:
+        print(f"  Computed 12-1 momentum for {len(momentum)} symbols")
+
+    scored = strategy.screen(momentum_signals=momentum)
 
     print(f"\n=== Top 20 Candidates ===")
     for i, s in enumerate(scored[:20], 1):
@@ -257,15 +265,18 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
                 print(f"\nMarket circuit breaker: SPY down {spy_change:.2%} (threshold: {Config.MARKET_CIRCUIT_BREAKER_PCT:.0%})")
                 return 0
 
-    # Fetch momentum signals
+    # Step 1: Get passing stocks (fundamentals — cached after first run)
+    print("\n=== Screening Universe ===")
+    passing_stocks = strategy._get_passing_stocks()
+    symbols = [s.symbol for s in passing_stocks[:Config.OPTIMIZER_CANDIDATES]]
+
+    # Step 2: Compute momentum from top candidates
     print("\n=== Fetching Price History ===")
-    scored_preview = strategy.screen()
-    symbols = [s.stock.symbol for s in scored_preview[:Config.OPTIMIZER_CANDIDATES]]
     momentum = _fetch_momentum_signals(fmp, symbols, cache, force_refresh)
     if momentum:
         print(f"  Computed 12-1 momentum for {len(momentum)} symbols")
 
-    # Get DCA target
+    # Step 3: Score with momentum and pick DCA target
     print("\n=== Selecting DCA Target ===")
     target = strategy.get_dca_buy_target(
         positions=status.positions,
@@ -284,18 +295,6 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
     print(f"  Amount: ${Config.DAILY_INVESTMENT:,.2f}")
     for reason in target.reasons:
         print(f"  - {reason}")
-
-    # Show individual stats if we have prices
-    date_key = cache.get_date_key()
-    sym_hash = symbols_hash(symbols)
-    cached_prices = cache.load("prices", f"prices_{date_key}_{sym_hash}")
-    if cached_prices:
-        prices_df = dict_to_dataframe(cached_prices)
-        if target.stock.symbol in prices_df.columns:
-            stats = compute_individual_stats(prices_df[[target.stock.symbol]])
-            if stats:
-                s = stats[0]
-                print(f"  1Y Return: {s.annual_return:+.1%} | Vol: {s.annual_volatility:.1%} | Sharpe: {s.sharpe_ratio:.2f} | Max DD: {s.max_drawdown:.1%}")
 
     print(f"\nTotal API calls: {fmp.get_api_call_count()}")
     print("\n[DRY RUN - No trades executed]")
@@ -353,15 +352,17 @@ def cmd_execute(force_refresh: bool = False) -> int:
                     send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
                 return 0
 
-    # Fetch momentum signals
+    # Step 1: Get passing stocks (fundamentals — cached after first run)
     print("\n=== Screening Universe ===")
-    scored_preview = strategy.screen()
-    symbols = [s.stock.symbol for s in scored_preview[:Config.OPTIMIZER_CANDIDATES]]
+    passing_stocks = strategy._get_passing_stocks()
+    symbols = [s.symbol for s in passing_stocks[:Config.OPTIMIZER_CANDIDATES]]
+
+    # Step 2: Compute momentum from top candidates
     momentum = _fetch_momentum_signals(fmp, symbols, cache, force_refresh)
     if momentum:
         print(f"  Computed 12-1 momentum for {len(momentum)} symbols")
 
-    # Get DCA target
+    # Step 3: Score with momentum and pick DCA target
     print("\n=== Selecting DCA Target ===")
     target = strategy.get_dca_buy_target(
         positions=status.positions,
