@@ -31,7 +31,7 @@ class Config:
     MIN_REVENUE: float = 10_000_000  # $10M minimum revenue
 
     # DCA (Dollar-Cost Averaging)
-    DAILY_INVESTMENT: float = 50.0  # $50/day into best stock
+    DAILY_INVESTMENT: float = 5_000.0  # $5,000/day into best stock (paper trading)
     TARGET_POSITIONS: int = 15
     NEW_POSITION_SCORE_THRESHOLD: float = 0.20  # 20% premium to open new position
 
