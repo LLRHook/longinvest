@@ -35,9 +35,17 @@ class StockData:
     free_cash_flow_growth: float | None
     # Revenue
     revenue: float | None = None
+    # Valuation
+    pe_ratio: float | None = None
+    peg_ratio: float | None = None
+    price_to_book: float | None = None
+    ev_to_ebitda: float | None = None
+    enterprise_value: float | None = None
+    fcf_margin: float | None = None
     # Earnings momentum
     earnings_growth: float | None = None
     eps_beat_count: int | None = None
+    quarterly_eps_values: list[float] | None = None
     earnings_growth_accelerating: bool | None = None
     revenue_growth_accelerating: bool | None = None
     next_earnings_date: str | None = None
@@ -234,6 +242,30 @@ class FMPClient:
                 else:
                     revenue = None
 
+            # Valuation ratios (from existing API calls)
+            pe_ratio = ratios.get("peRatioTTM") if ratios else None
+            peg_ratio = ratios.get("pegRatioTTM") if ratios else None
+            price_to_book = ratios.get("priceToBookRatioTTM") if ratios else None
+            ev_to_ebitda = metrics.get("enterpriseValueOverEBITDATTM") if metrics else None
+            enterprise_value = metrics.get("enterpriseValueTTM") if metrics else None
+
+            # FCF margin: free_cash_flow / revenue
+            fcf = metrics.get("freeCashFlowTTM") if metrics else None
+            fcf_margin = None
+            if fcf is not None and revenue is not None and revenue > 0:
+                fcf_margin = fcf / revenue
+
+            # Quarterly EPS actuals from surprises
+            quarterly_eps_values = None
+            if surprises:
+                eps_vals = []
+                for s in surprises[:4]:
+                    actual = s.get("actualEarningResult")
+                    if actual is not None:
+                        eps_vals.append(float(actual))
+                if eps_vals:
+                    quarterly_eps_values = eps_vals
+
             # Earnings calendar: find next and last earnings dates
             next_earnings_date = None
             days_since_last_earnings = None
@@ -275,8 +307,15 @@ class FMPClient:
                 free_cash_flow=metrics.get("freeCashFlowTTM") if metrics else None,
                 free_cash_flow_growth=growth_data.get("freeCashFlowGrowth"),
                 revenue=revenue,
+                pe_ratio=pe_ratio,
+                peg_ratio=peg_ratio,
+                price_to_book=price_to_book,
+                ev_to_ebitda=ev_to_ebitda,
+                enterprise_value=enterprise_value,
+                fcf_margin=fcf_margin,
                 earnings_growth=earnings_growth,
                 eps_beat_count=eps_beat_count,
+                quarterly_eps_values=quarterly_eps_values,
                 earnings_growth_accelerating=earnings_growth_accelerating,
                 revenue_growth_accelerating=revenue_growth_accelerating,
                 next_earnings_date=next_earnings_date,
