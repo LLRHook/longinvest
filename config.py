@@ -30,36 +30,25 @@ class Config:
     REQUIRE_POSITIVE_FCF: bool = False
     MIN_REVENUE: float = 10_000_000  # $10M minimum revenue
 
-    # Portfolio Optimization
-    INVESTMENT_BUDGET: float = 5000.0
-    OPTIMIZER_CANDIDATES: int = 20
-    MIN_ALLOCATION_THRESHOLD: float = 0.03  # 3%
+    # DCA (Dollar-Cost Averaging)
+    DAILY_INVESTMENT: float = 50.0  # $50/day into best stock
+    TARGET_POSITIONS: int = 15
+    NEW_POSITION_SCORE_THRESHOLD: float = 0.20  # 20% premium to open new position
+
+    # Portfolio Limits
+    OPTIMIZER_CANDIDATES: int = 30
     HISTORICAL_DAYS: int = 365
     MIN_HISTORICAL_DAYS: int = 100
-    MAX_SINGLE_POSITION_PCT: float = 0.25  # 25% max per stock
-    MAX_SECTOR_ALLOCATION: float = 0.60  # 60% max per sector
+    MAX_SINGLE_POSITION_PCT: float = 0.15  # 15% max per stock
+    MAX_SECTOR_ALLOCATION: float = 0.35  # 35% max per sector
 
     # Technical Filters
     SMA_TREND_PERIOD: int = 50
     RSI_OVERBOUGHT: float = 75.0
-    MOMENTUM_TILT_FACTOR: float = 0.20
-
-    # Intraday Check
-    INTRADAY_MIN_CHANGE: float = -0.03  # Skip if stock down > 3% today
-    ENABLE_INTRADAY_CHECK: bool = True
 
     # Circuit Breaker
-    CIRCUIT_BREAKER_PCT: float = -0.05  # Halt if portfolio down > 5% today
-    MARKET_CIRCUIT_BREAKER_PCT: float = -0.03  # Halt if SPY down > 3% today
-
-    # Rebalancing
-    REBALANCE_THRESHOLD: float = 0.05  # Rebalance if position drifts > 5% from target
-    ENABLE_REBALANCING: bool = True
-
-    # Risk Management
-    TRAILING_STOP_PCT: float = 0.12  # 12% trailing stop
-    TRAILING_STOP_TIGHT_PCT: float = 0.08  # 8% for positions up > 20%
-    PROFIT_TARGET_TIGHTEN_PCT: float = 0.20  # Threshold to switch to tight stop
+    CIRCUIT_BREAKER_PCT: float = -0.08  # Halt if portfolio down > 8% today
+    MARKET_CIRCUIT_BREAKER_PCT: float = -0.04  # Halt if SPY down > 4% today
 
     # Earnings Calendar
     EARNINGS_BLACKOUT_DAYS: int = 5
