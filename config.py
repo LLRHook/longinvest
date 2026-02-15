@@ -37,7 +37,7 @@ class Config:
 
     # Portfolio Limits
     OPTIMIZER_CANDIDATES: int = 30
-    HISTORICAL_DAYS: int = 365
+    HISTORICAL_DAYS: int = 400  # ~273 trading days needed for 12-1 month momentum
     MIN_HISTORICAL_DAYS: int = 100
     MAX_SINGLE_POSITION_PCT: float = 0.15  # 15% max per stock
     MAX_SECTOR_ALLOCATION: float = 0.35  # 35% max per sector
