@@ -2,11 +2,7 @@ name: Trading Bot
 
 on:
   schedule:
-    # Market open: 9:30 AM ET
-    # Winter (Nov-Mar): ET = UTC-5, so 9:30 AM ET = 14:30 UTC
-    # Summer (Mar-Nov): ET = UTC-4, so 9:30 AM ET = 13:30 UTC
-    # Run at both times; the market-check step will skip if market is closed
-    - cron: '30 13 * * 1-5'
+    # Market open: 14:30 UTC (9:30 AM ET winter / 10:30 AM ET summer)
     - cron: '30 14 * * 1-5'
 
     # Daily report: 4:30 PM ET
