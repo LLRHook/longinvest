@@ -79,7 +79,12 @@ def cmd_report(dry_run: bool = False) -> int:
     if portfolio_df is not None and benchmark_df is not None:
         perf_data = calculate_cumulative_returns(portfolio_df, benchmark_df)
         if perf_data is not None:
-            chart_image = generate_performance_chart(perf_data)
+            chart_image = generate_performance_chart(
+                perf_data,
+                report=report,
+                portfolio_df=portfolio_df,
+                benchmark_df=benchmark_df,
+            )
     if chart_image:
         print("Chart generated successfully.")
     else:
