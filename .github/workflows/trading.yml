@@ -5,10 +5,7 @@ on:
     # Market open: 14:30 UTC (9:30 AM ET winter / 10:30 AM ET summer)
     - cron: '30 14 * * 1-5'
 
-    # Daily report: 4:30 PM ET
-    # Winter: 4:30 PM ET = 21:30 UTC
-    # Summer: 4:30 PM ET = 20:30 UTC
-    - cron: '30 20 * * 1-5'
+    # Daily report: ~4:30 PM ET (21:30 UTC = 4:30 PM EST / 5:30 PM EDT)
     - cron: '30 21 * * 1-5'
 
   workflow_dispatch:
@@ -87,11 +84,11 @@ jobs:
           echo "Current UTC hour: $UTC_HOUR, ET hour: $ET_HOUR"
 
           # 9 AM ET  = market open  → execute trades
-          # 4 PM ET  = market close → daily report
+          # 4-5 PM ET = market close → daily report (5 PM in summer due to fixed UTC cron)
           if [ "$ET_HOUR" -eq 9 ] || [ "$ET_HOUR" -eq 10 ]; then
             echo "action=execute" >> $GITHUB_OUTPUT
             echo "Scheduled: Market open - running execute"
-          elif [ "$ET_HOUR" -eq 16 ]; then
+          elif [ "$ET_HOUR" -eq 16 ] || [ "$ET_HOUR" -eq 17 ]; then
             echo "action=report" >> $GITHUB_OUTPUT
             echo "Scheduled: Market close - sending daily report"
           else
