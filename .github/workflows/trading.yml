@@ -1,12 +1,10 @@
 name: Trading Bot
 
 on:
-  schedule:
-    # Market open: 14:30 UTC (9:30 AM ET winter / 10:30 AM ET summer)
-    - cron: '30 14 * * 1-5'
-
-    # Daily report: ~4:30 PM ET (21:30 UTC = 4:30 PM EST / 5:30 PM EDT)
-    - cron: '30 21 * * 1-5'
+  # Automated cron schedules disabled — manual only until a long-term strategy is established
+  # schedule:
+  #   - cron: '30 14 * * 1-5'  # Market open execute
+  #   - cron: '30 21 * * 1-5'  # Daily report
 
   workflow_dispatch:
     inputs:
