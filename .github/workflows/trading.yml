@@ -97,6 +97,10 @@ jobs:
         if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'status'
         run: python main.py --status
 
+      - name: Dry run (no trades)
+        if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'dry-run'
+        run: python main.py --dry-run
+
       - name: Execute trades (LIVE)
         if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'execute'
         run: python main.py
