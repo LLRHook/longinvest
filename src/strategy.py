@@ -213,6 +213,11 @@ class MultiFactorStrategy:
         if stock.de_ratio is not None and stock.de_ratio > Config.MAX_DE_RATIO:
             failures.append(f"High D/E: {stock.de_ratio:.2f}")
 
+        if stock.avg_volume is not None and stock.price > 0:
+            dollar_volume = stock.avg_volume * stock.price
+            if dollar_volume < Config.MIN_AVG_DAILY_DOLLAR_VOLUME:
+                failures.append(f"Low daily dollar volume: ${dollar_volume:,.0f}")
+
         return len(failures) == 0, failures
 
     def _get_passing_stocks(
@@ -330,21 +335,23 @@ class MultiFactorStrategy:
         logger.info(f"Recommending {len(recommendations)} stocks for purchase")
         return recommendations
 
-    def get_dca_buy_target(
+    def get_dca_buy_targets(
         self,
         positions: list,
         portfolio_value: float,
         momentum_signals: dict[str, float] | None = None,
-    ) -> ScoredStock | None:
-        """Pick the single best stock for today's DCA buy.
+    ) -> list[ScoredStock]:
+        """Pick up to DCA_TOP_N best stocks for today's DCA buys.
 
         Logic:
         1. Re-screen + re-score the universe (including existing holdings).
-        2. Pick highest-scoring stock subject to:
+        2. Pick highest-scoring stocks subject to:
            - Position cap: no position > MAX_SINGLE_POSITION_PCT of portfolio
            - Sector cap: no sector > MAX_SECTOR_ALLOCATION of portfolio
         3. New positions require NEW_POSITION_SCORE_THRESHOLD premium over worst holding
            when at TARGET_POSITIONS count.
+        4. Each successive pick accounts for projected additions from earlier
+           picks when checking position and sector caps.
 
         Args:
             positions: List of broker position objects (need .symbol, .market_value, .sector or lookup).
@@ -352,7 +359,7 @@ class MultiFactorStrategy:
             momentum_signals: Optional {symbol: raw_return}.
 
         Returns:
-            Best ScoredStock to buy, or None if no valid target.
+            List of up to DCA_TOP_N ScoredStock targets, or empty list if none valid.
         """
         held_symbols = {p.symbol for p in positions}
         position_values = {p.symbol: p.market_value for p in positions}
@@ -373,7 +380,7 @@ class MultiFactorStrategy:
 
         if not scored:
             logger.info("No scored stocks available for DCA")
-            return None
+            return []
 
         # Build sector map from scored stocks
         for s in scored:
@@ -393,21 +400,31 @@ class MultiFactorStrategy:
                 held_scores[s.stock.symbol] = s.score
         worst_held_score = min(held_scores.values()) if held_scores else 0.0
 
-        # Pick best valid target
+        # Pick up to DCA_TOP_N valid targets, accounting for projected additions
+        targets: list[ScoredStock] = []
+        per_pick_amount = Config.DAILY_INVESTMENT / Config.DCA_TOP_N
+        projected_position_additions: dict[str, float] = {}  # symbol -> cumulative $ from earlier picks
+        projected_sector_additions: dict[str, float] = {}    # sector -> cumulative $ from earlier picks
+
         for candidate in scored:
+            if len(targets) >= Config.DCA_TOP_N:
+                break
+
             symbol = candidate.stock.symbol
             sector = candidate.stock.sector or "Unknown"
 
-            # Position cap check
+            # Position cap check (include projected additions from earlier picks)
             current_value = position_values.get(symbol, 0)
-            projected_value = current_value + Config.DAILY_INVESTMENT
+            already_added = projected_position_additions.get(symbol, 0)
+            projected_value = current_value + already_added + per_pick_amount
             if portfolio_value > 0 and projected_value / portfolio_value > Config.MAX_SINGLE_POSITION_PCT:
                 logger.info(f"Skipping {symbol}: would exceed position cap ({projected_value / portfolio_value:.1%})")
                 continue
 
-            # Sector cap check
+            # Sector cap check (include projected additions from earlier picks)
             current_sector_value = sector_totals.get(sector, 0)
-            projected_sector = current_sector_value + Config.DAILY_INVESTMENT
+            sector_already_added = projected_sector_additions.get(sector, 0)
+            projected_sector = current_sector_value + sector_already_added + per_pick_amount
             if portfolio_value > 0 and projected_sector / portfolio_value > Config.MAX_SECTOR_ALLOCATION:
                 logger.info(f"Skipping {symbol}: would exceed sector cap for {sector}")
                 continue
@@ -422,10 +439,16 @@ class MultiFactorStrategy:
                     )
                     continue
 
-            return candidate
+            targets.append(candidate)
+            projected_position_additions[symbol] = already_added + per_pick_amount
+            projected_sector_additions[sector] = sector_already_added + per_pick_amount
 
-        logger.info("No valid DCA target found after applying caps")
-        return None
+        if targets:
+            logger.info(f"Selected {len(targets)} DCA targets")
+        else:
+            logger.info("No valid DCA targets found after applying caps")
+
+        return targets
 
     def _get_cached_screener_candidates(self) -> list[dict]:
         """Get screener candidates with caching."""

@@ -25,15 +25,17 @@ class Config:
     MAX_MARKET_CAP: float = 2_000_000_000  # $2B (small cap ceiling)
 
     # Guardrails
-    MAX_DE_RATIO: float = 3.0
+    MAX_DE_RATIO: float = 1.5
     MIN_REVENUE_GROWTH: float = -0.10  # Allow 10% decline
-    REQUIRE_POSITIVE_FCF: bool = False
+    REQUIRE_POSITIVE_FCF: bool = True
     MIN_REVENUE: float = 10_000_000  # $10M minimum revenue
+    MIN_AVG_DAILY_DOLLAR_VOLUME: float = 500_000
 
     # DCA (Dollar-Cost Averaging)
     DAILY_INVESTMENT: float = 5_000.0  # $5,000/day into best stock (paper trading)
     TARGET_POSITIONS: int = 15
     NEW_POSITION_SCORE_THRESHOLD: float = 0.20  # 20% premium to open new position
+    DCA_TOP_N: int = 5
 
     # Portfolio Limits
     OPTIMIZER_CANDIDATES: int = 30

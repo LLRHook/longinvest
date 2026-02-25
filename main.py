@@ -5,6 +5,8 @@ import sys
 import time
 from datetime import datetime, timedelta
 
+import pandas as pd
+
 from config import Config
 from src.broker import AlpacaBroker
 from src.cache import (
@@ -23,6 +25,7 @@ from src.charter import (
 from src.notifier import (
     format_circuit_breaker_embed,
     format_dca_buy_embed,
+    format_dca_summary_embed,
     format_performance_embed,
     format_screening_embed,
     send_discord_chart_message,
@@ -165,10 +168,10 @@ def cmd_status() -> int:
     return 0
 
 
-def _fetch_momentum_signals(fmp: FMPClient, symbols: list[str], cache: CacheManager, force_refresh: bool) -> dict[str, float]:
+def _fetch_momentum_signals(fmp: FMPClient, symbols: list[str], cache: CacheManager, force_refresh: bool) -> tuple[dict[str, float], pd.DataFrame]:
     """Fetch historical prices and compute 12-1 month momentum signals."""
     if not symbols:
-        return {}
+        return {}, pd.DataFrame()
 
     date_key = cache.get_date_key()
     sym_hash = symbols_hash(symbols)
@@ -199,12 +202,28 @@ def _fetch_momentum_signals(fmp: FMPClient, symbols: list[str], cache: CacheMana
             print("  No price data returned")
 
     if prices_df.empty:
-        return {}
+        return {}, pd.DataFrame()
 
     signals = compute_price_momentum_12_1(prices_df)
     if not signals:
         print(f"  Momentum: need 273 trading days, have {len(prices_df)} — insufficient history")
-    return signals
+    return signals, prices_df
+
+
+def _compute_candidate_volatilities(prices_df: pd.DataFrame) -> dict[str, float]:
+    """Compute annualized volatility for each symbol from price history."""
+    if prices_df.empty:
+        return {}
+    vols = {}
+    for symbol in prices_df.columns:
+        prices = prices_df[symbol].dropna()
+        if len(prices) < 20:
+            continue
+        daily_returns = prices.pct_change().dropna()
+        annual_vol = float(daily_returns.std() * (252 ** 0.5))
+        if annual_vol > 0:
+            vols[symbol] = annual_vol
+    return vols
 
 
 def cmd_screen(force_refresh: bool = False) -> int:
@@ -220,7 +239,7 @@ def cmd_screen(force_refresh: bool = False) -> int:
     # Get passing stocks, compute momentum, then score
     passing_stocks = strategy._get_passing_stocks()
     symbols = [s.symbol for s in passing_stocks[:Config.OPTIMIZER_CANDIDATES]]
-    momentum = _fetch_momentum_signals(fmp, symbols, cache, force_refresh)
+    momentum, prices_df = _fetch_momentum_signals(fmp, symbols, cache, force_refresh)
     if momentum:
         print(f"  Computed 12-1 momentum for {len(momentum)} symbols")
 
@@ -285,29 +304,47 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
 
     # Step 2: Compute momentum from top candidates
     print("\n=== Fetching Price History ===")
-    momentum = _fetch_momentum_signals(fmp, symbols, cache, force_refresh)
+    momentum, prices_df = _fetch_momentum_signals(fmp, symbols, cache, force_refresh)
     if momentum:
         print(f"  Computed 12-1 momentum for {len(momentum)} symbols")
 
-    # Step 3: Score with momentum and pick DCA target
-    print("\n=== Selecting DCA Target ===")
-    target = strategy.get_dca_buy_target(
+    # Step 3: Score with momentum and pick DCA targets
+    print("\n=== Selecting DCA Targets ===")
+    targets = strategy.get_dca_buy_targets(
         positions=status.positions,
         portfolio_value=status.portfolio_value,
         momentum_signals=momentum,
     )
 
-    if not target:
-        print("No valid DCA target found today.")
+    if not targets:
+        print("No valid DCA targets found today.")
         return 0
 
-    print(f"\nBest pick: {target.stock.symbol} - {target.stock.name}")
-    print(f"  Score: {target.score:.1f}/100")
-    print(f"  Price: ${target.stock.price:.2f}")
-    print(f"  Sector: {target.stock.sector}")
-    print(f"  Amount: ${Config.DAILY_INVESTMENT:,.2f}")
-    for reason in target.reasons:
-        print(f"  - {reason}")
+    # Compute vol-adjusted allocations
+    vols = _compute_candidate_volatilities(prices_df)
+    raw_weights = {}
+    for t in targets:
+        vol = vols.get(t.stock.symbol)
+        if vol and vol > 0:
+            raw_weights[t.stock.symbol] = 1.0 / vol
+        else:
+            median_vol = sorted(vols.values())[len(vols) // 2] if vols else 0.5
+            raw_weights[t.stock.symbol] = 1.0 / median_vol
+
+    total_weight = sum(raw_weights.values())
+    allocations = {sym: (w / total_weight) * Config.DAILY_INVESTMENT for sym, w in raw_weights.items()}
+
+    print(f"\nBuying {len(targets)} stocks (vol-adjusted, DRY RUN):")
+    for target in targets:
+        symbol = target.stock.symbol
+        amount = allocations[symbol]
+        vol_pct = vols.get(symbol, 0) * 100
+        print(f"\n  {symbol} ({target.stock.name})")
+        print(f"    Score: {target.score:.1f}/100 | Vol: {vol_pct:.0f}% | Amount: ${amount:,.2f}")
+        print(f"    Price: ${target.stock.price:.2f}")
+        print(f"    Sector: {target.stock.sector}")
+        for reason in target.reasons:
+            print(f"    - {reason}")
 
     print(f"\nTotal API calls: {fmp.get_api_call_count()}")
     print("\n[DRY RUN - No trades executed]")
@@ -371,71 +408,107 @@ def cmd_execute(force_refresh: bool = False) -> int:
     symbols = [s.symbol for s in passing_stocks[:Config.OPTIMIZER_CANDIDATES]]
 
     # Step 2: Compute momentum from top candidates
-    momentum = _fetch_momentum_signals(fmp, symbols, cache, force_refresh)
+    momentum, prices_df = _fetch_momentum_signals(fmp, symbols, cache, force_refresh)
     if momentum:
         print(f"  Computed 12-1 momentum for {len(momentum)} symbols")
 
-    # Step 3: Score with momentum and pick DCA target
-    print("\n=== Selecting DCA Target ===")
-    target = strategy.get_dca_buy_target(
+    # Step 3: Score with momentum and pick DCA targets
+    print("\n=== Selecting DCA Targets ===")
+    targets = strategy.get_dca_buy_targets(
         positions=status.positions,
         portfolio_value=status.portfolio_value,
         momentum_signals=momentum,
     )
 
-    if not target:
-        print("No valid DCA target found today.")
+    if not targets:
+        print("No valid DCA targets found today.")
         return 0
 
-    symbol = target.stock.symbol
-    price = target.stock.price
-    amount = Config.DAILY_INVESTMENT
+    # Compute vol-adjusted allocations
+    vols = _compute_candidate_volatilities(prices_df)
+    raw_weights = {}
+    for t in targets:
+        vol = vols.get(t.stock.symbol)
+        if vol and vol > 0:
+            raw_weights[t.stock.symbol] = 1.0 / vol
+        else:
+            # Fallback: use median vol of available candidates
+            median_vol = sorted(vols.values())[len(vols) // 2] if vols else 0.5
+            raw_weights[t.stock.symbol] = 1.0 / median_vol
 
-    print(f"\nBuying {symbol} ({target.stock.name})")
-    print(f"  Score: {target.score:.1f}/100")
-    print(f"  Amount: ${amount:,.2f} @ ${price:.2f}")
+    total_weight = sum(raw_weights.values())
+    allocations = {sym: (w / total_weight) * Config.DAILY_INVESTMENT for sym, w in raw_weights.items()}
 
-    # Execute buy
-    fractionable = broker.is_fractionable(symbol)
+    print(f"\nBuying {len(targets)} stocks (vol-adjusted):")
+    bought_count = 0
+    for target in targets:
+        symbol = target.stock.symbol
+        price = target.stock.price
+        amount = allocations[symbol]
+        vol_pct = vols.get(symbol, 0) * 100
 
-    if fractionable:
-        order_id = broker.buy_notional(symbol, amount)
-    else:
-        if price <= 0:
-            print(f"Skipping {symbol}: no price available")
-            return 1
-        whole_qty = int(amount // price)
-        if whole_qty < 1:
-            print(f"Skipping {symbol}: ${amount:,.2f} < 1 share at ${price:.2f}")
-            return 1
-        actual_amount = whole_qty * price
-        print(f"  Non-fractionable: buying {whole_qty} shares (~${actual_amount:,.2f})")
-        order_id = broker.buy_qty(symbol, whole_qty)
+        print(f"\n  {symbol} ({target.stock.name})")
+        print(f"    Score: {target.score:.1f}/100 | Vol: {vol_pct:.0f}% | Amount: ${amount:,.2f}")
 
-    if order_id:
-        print(f"  Order placed: {order_id}")
-        qty_est = amount / price if price > 0 else 0
-        tracker.record_buy(symbol=symbol, price=price, quantity=qty_est)
+        fractionable = broker.is_fractionable(symbol)
+        if fractionable:
+            order_id = broker.buy_notional(symbol, amount)
+        else:
+            if price <= 0:
+                print(f"    Skipping: no price available")
+                continue
+            whole_qty = int(amount // price)
+            if whole_qty < 1:
+                print(f"    Skipping: ${amount:,.2f} < 1 share at ${price:.2f}")
+                continue
+            actual_amount = whole_qty * price
+            print(f"    Non-fractionable: buying {whole_qty} shares (~${actual_amount:,.2f})")
+            order_id = broker.buy_qty(symbol, whole_qty)
 
-        # Discord notification
-        if Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:
-            embed = format_dca_buy_embed(
-                symbol=symbol,
-                name=target.stock.name,
-                score=target.score,
-                amount=amount,
-                price=price,
-                sector=target.stock.sector or "Unknown",
-                reasons=target.reasons,
-                position_count=len(status.positions) + (1 if symbol not in {p.symbol for p in status.positions} else 0),
-            )
-            send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
-    else:
-        print(f"  Order FAILED for {symbol}")
-        return 1
+        if order_id:
+            print(f"    Order placed: {order_id}")
+            qty_est = amount / price if price > 0 else 0
+            tracker.record_buy(symbol=symbol, price=price, quantity=qty_est)
+            bought_count += 1
 
-    print(f"\nTotal API calls: {fmp.get_api_call_count()}")
-    return 0
+            if Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:
+                embed = format_dca_buy_embed(
+                    symbol=symbol,
+                    name=target.stock.name,
+                    score=target.score,
+                    amount=amount,
+                    price=price,
+                    sector=target.stock.sector or "Unknown",
+                    reasons=target.reasons,
+                    position_count=len(status.positions) + bought_count,
+                )
+                send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
+        else:
+            print(f"    Order FAILED for {symbol}")
+
+    print(f"\nBought {bought_count}/{len(targets)} stocks successfully.")
+
+    # Send DCA summary notification
+    if bought_count > 1 and Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:
+        buy_summaries = []
+        for target in targets:
+            sym = target.stock.symbol
+            if sym in allocations:
+                buy_summaries.append({
+                    "symbol": sym,
+                    "name": target.stock.name,
+                    "score": target.score,
+                    "amount": allocations[sym],
+                    "price": target.stock.price,
+                    "sector": target.stock.sector or "Unknown",
+                    "vol": vols.get(sym, 0) * 100,
+                })
+        summary_embed = format_dca_summary_embed(buy_summaries, Config.DAILY_INVESTMENT)
+        time.sleep(1)
+        send_discord_notification(Config.DISCORD_WEBHOOK_URL, summary_embed)
+
+    print(f"Total API calls: {fmp.get_api_call_count()}")
+    return 0 if bought_count > 0 else 1
 
 
 def main() -> int:
