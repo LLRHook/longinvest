@@ -1,10 +1,9 @@
 name: Trading Bot
 
 on:
-  # Automated cron schedules disabled — manual only until a long-term strategy is established
-  # schedule:
-  #   - cron: '30 14 * * 1-5'  # Market open execute
-  #   - cron: '30 21 * * 1-5'  # Daily report
+  schedule:
+    - cron: '30 14 * * 1-5'  # Market open execute (~9:30 AM ET)
+    - cron: '30 21 * * 1-5'  # Daily report (~4:30 PM ET)
 
   workflow_dispatch:
     inputs:
