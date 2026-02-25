@@ -28,11 +28,14 @@ jobs:
       - name: Install alpaca-py
         run: pip install alpaca-py
 
-      - name: Liquidate all positions
+      - name: Liquidate old positions
         run: |
           python3 << 'PYEOF'
           import os
           from alpaca.trading.client import TradingClient
+
+          # Old positions: large-cap stocks from before the multi-factor DCA system
+          OLD_SYMBOLS = {"AVGO", "LRCX", "NVDA", "MU", "AMD", "GOOGL", "GE", "PLTR", "LLY"}
 
           dry_run = "${{ inputs.dry_run }}" == "true"
           client = TradingClient(
@@ -43,14 +46,16 @@ jobs:
 
           account = client.get_account()
           positions = client.get_all_positions()
+          old_positions = [p for p in positions if p.symbol in OLD_SYMBOLS]
 
           print(f"Account value: ${float(account.portfolio_value):,.2f}")
           print(f"Cash: ${float(account.cash):,.2f}")
-          print(f"Positions: {len(positions)}")
+          print(f"Total positions: {len(positions)}")
+          print(f"Old positions to sell: {len(old_positions)}")
           print()
 
-          if not positions:
-              print("No positions to liquidate.")
+          if not old_positions:
+              print("No old positions found.")
               raise SystemExit(0)
 
           total_value = 0.0
@@ -59,7 +64,7 @@ jobs:
           print(f"{'Symbol':<8} {'Qty':>10} {'Entry':>10} {'Current':>10} {'Value':>12} {'P/L':>12} {'P/L%':>8}")
           print("-" * 82)
 
-          for p in sorted(positions, key=lambda x: float(x.market_value), reverse=True):
+          for p in sorted(old_positions, key=lambda x: float(x.market_value), reverse=True):
               sym = p.symbol
               qty = float(p.qty)
               entry = float(p.avg_entry_price)
@@ -84,11 +89,11 @@ jobs:
               print("Re-run with dry_run=false to execute sells.")
               raise SystemExit(0)
 
-          print("=== LIQUIDATING ALL POSITIONS ===")
+          print("=== SELLING OLD POSITIONS ===")
           print()
 
           failed = []
-          for p in positions:
+          for p in old_positions:
               sym = p.symbol
               try:
                   order = client.close_position(sym)
@@ -98,10 +103,10 @@ jobs:
                   failed.append(sym)
 
           print()
-          print(f"Closed {len(positions) - len(failed)}/{len(positions)} positions.")
+          print(f"Closed {len(old_positions) - len(failed)}/{len(old_positions)} old positions.")
           if failed:
               print(f"Failed: {', '.join(failed)}")
               raise SystemExit(1)
           else:
-              print("All positions liquidated successfully.")
+              print("All old positions liquidated. New system positions untouched.")
           PYEOF
