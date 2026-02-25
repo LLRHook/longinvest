@@ -1,0 +1,107 @@
+name: Liquidate Old Positions
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (list positions only, no sells)'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+  ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+
+jobs:
+  liquidate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install alpaca-py
+        run: pip install alpaca-py
+
+      - name: Liquidate all positions
+        run: |
+          python3 << 'PYEOF'
+          import os
+          from alpaca.trading.client import TradingClient
+
+          dry_run = "${{ inputs.dry_run }}" == "true"
+          client = TradingClient(
+              api_key=os.environ["ALPACA_API_KEY"],
+              secret_key=os.environ["ALPACA_SECRET_KEY"],
+              paper=True,
+          )
+
+          account = client.get_account()
+          positions = client.get_all_positions()
+
+          print(f"Account value: ${float(account.portfolio_value):,.2f}")
+          print(f"Cash: ${float(account.cash):,.2f}")
+          print(f"Positions: {len(positions)}")
+          print()
+
+          if not positions:
+              print("No positions to liquidate.")
+              raise SystemExit(0)
+
+          total_value = 0.0
+          total_pl = 0.0
+
+          print(f"{'Symbol':<8} {'Qty':>10} {'Entry':>10} {'Current':>10} {'Value':>12} {'P/L':>12} {'P/L%':>8}")
+          print("-" * 82)
+
+          for p in sorted(positions, key=lambda x: float(x.market_value), reverse=True):
+              sym = p.symbol
+              qty = float(p.qty)
+              entry = float(p.avg_entry_price)
+              current = float(p.current_price) if p.current_price else 0.0
+              value = float(p.market_value)
+              pl = float(p.unrealized_pl)
+              plpc = float(p.unrealized_plpc) * 100
+
+              total_value += value
+              total_pl += pl
+
+              sign = "+" if pl >= 0 else ""
+              print(f"{sym:<8} {qty:>10.4f} {entry:>10.2f} {current:>10.2f} ${value:>10,.2f} {sign}${pl:>10,.2f} {sign}{plpc:>6.1f}%")
+
+          print("-" * 82)
+          sign = "+" if total_pl >= 0 else ""
+          print(f"{'TOTAL':<8} {'':>10} {'':>10} {'':>10} ${total_value:>10,.2f} {sign}${total_pl:>10,.2f}")
+          print()
+
+          if dry_run:
+              print("=== DRY RUN — no orders placed ===")
+              print("Re-run with dry_run=false to execute sells.")
+              raise SystemExit(0)
+
+          print("=== LIQUIDATING ALL POSITIONS ===")
+          print()
+
+          failed = []
+          for p in positions:
+              sym = p.symbol
+              try:
+                  order = client.close_position(sym)
+                  print(f"  SOLD {sym} — order {order.id}")
+              except Exception as e:
+                  print(f"  FAILED {sym} — {e}")
+                  failed.append(sym)
+
+          print()
+          print(f"Closed {len(positions) - len(failed)}/{len(positions)} positions.")
+          if failed:
+              print(f"Failed: {', '.join(failed)}")
+              raise SystemExit(1)
+          else:
+              print("All positions liquidated successfully.")
+          PYEOF
