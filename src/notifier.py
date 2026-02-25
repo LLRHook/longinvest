@@ -341,15 +341,16 @@ def format_performance_embed(report_data: dict[str, Any]) -> dict[str, Any]:
     benchmark = report_data["benchmark"]
     positions = report_data["positions"]
 
-    # Determine color based on portfolio performance
+    # Determine color based on outperformance vs benchmark (not absolute P/L)
     daily_pl = portfolio["daily_pl"]
     daily_pl_pct = portfolio["daily_pl_pct"]
+    outperformance = daily_pl_pct - benchmark["daily_change_pct"]
 
-    if daily_pl >= 0:
-        color = 0x00FF00  # Green
+    if outperformance >= 0:
+        color = 0x00FF00  # Green — beat benchmark
         change_emoji = "📈"
     else:
-        color = 0xFF0000  # Red
+        color = 0xFF0000  # Red — behind benchmark
         change_emoji = "📉"
 
     # Format portfolio change
@@ -359,8 +360,6 @@ def format_performance_embed(report_data: dict[str, Any]) -> dict[str, Any]:
     # Format benchmark
     bench_sign = "+" if benchmark["daily_change_pct"] >= 0 else ""
 
-    # Calculate outperformance
-    outperformance = daily_pl_pct - benchmark["daily_change_pct"]
     out_sign = "+" if outperformance >= 0 else ""
     out_emoji = "✅" if outperformance >= 0 else "❌"
 
