@@ -50,8 +50,25 @@ def compute_portfolio_risk_metrics(
     max_drawdown = float(drawdown.min())
     current_drawdown = float(drawdown.iloc[-1])
 
-    # Win rate
-    win_rate = float((daily_returns > 0).sum() / len(daily_returns))
+    # Win rate: days portfolio beat benchmark (not just positive days)
+    if benchmark_df is not None and not benchmark_df.empty:
+        bench_norm = benchmark_df.copy()
+        bench_norm.index = bench_norm.index.normalize()
+        bench_daily = bench_norm["close"].pct_change().dropna()
+
+        port_norm_wr = portfolio_df.copy()
+        port_norm_wr.index = port_norm_wr.index.normalize()
+        if port_norm_wr.index.tz is not None:
+            port_norm_wr.index = port_norm_wr.index.tz_localize(None)
+        port_daily_wr = port_norm_wr["equity"].pct_change().dropna()
+
+        common_wr = port_daily_wr.index.intersection(bench_daily.index)
+        if len(common_wr) > 0:
+            win_rate = float((port_daily_wr.loc[common_wr] > bench_daily.loc[common_wr]).sum() / len(common_wr))
+        else:
+            win_rate = 0.0
+    else:
+        win_rate = float((daily_returns > 0).sum() / len(daily_returns))
 
     metrics = {
         "sharpe": round(sharpe, 2),
