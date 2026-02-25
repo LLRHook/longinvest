@@ -292,6 +292,42 @@ def format_dca_buy_embed(
     }
 
 
+def format_dca_summary_embed(
+    buys: list[dict[str, Any]],
+    total_amount: float,
+) -> dict[str, Any]:
+    """Format a summary of all DCA buys for the day as a Discord embed.
+
+    Args:
+        buys: List of dicts with keys: symbol, name, score, amount, price, sector, vol
+        total_amount: Total dollar amount invested
+
+    Returns:
+        Discord embed dict
+    """
+    lines = []
+    for b in buys:
+        vol_str = f" | Vol: {b['vol']:.0f}%" if b.get('vol') else ""
+        lines.append(
+            f"**{b['symbol']}** ({b['name'][:20]}) — "
+            f"${b['amount']:,.0f} @ ${b['price']:.2f} | "
+            f"Score: {b['score']:.0f}{vol_str}"
+        )
+
+    description_lines = [
+        f"**Total invested:** ${total_amount:,.2f}",
+        f"**Stocks bought:** {len(buys)}",
+        "",
+    ] + lines
+
+    return {
+        "title": f"DCA Summary — {len(buys)} Buys",
+        "description": "\n".join(description_lines),
+        "color": 0x22C55E,
+        "footer": {"text": "Multi-Factor DCA Bot"},
+    }
+
+
 def format_performance_embed(report_data: dict[str, Any]) -> dict[str, Any]:
     """Format report data into a Discord embed.
 

@@ -165,6 +165,7 @@ def dict_to_stock_data(d: dict[str, Any]) -> Any:
     d.setdefault("revenue_growth_accelerating", None)
     d.setdefault("next_earnings_date", None)
     d.setdefault("days_since_last_earnings", None)
+    d.setdefault("avg_volume", None)
     return StockData(**d)
 
 

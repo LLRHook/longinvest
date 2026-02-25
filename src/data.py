@@ -50,6 +50,7 @@ class StockData:
     revenue_growth_accelerating: bool | None = None
     next_earnings_date: str | None = None
     days_since_last_earnings: int | None = None
+    avg_volume: float | None = None
 
 
 class FMPClient:
@@ -320,6 +321,7 @@ class FMPClient:
                 revenue_growth_accelerating=revenue_growth_accelerating,
                 next_earnings_date=next_earnings_date,
                 days_since_last_earnings=days_since_last_earnings,
+                avg_volume=quote.get("avgVolume") if quote else None,
             )
         except Exception as e:
             logger.error(f"Error fetching data for {symbol}: {e}")
