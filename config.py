@@ -32,10 +32,12 @@ class Config:
     MIN_AVG_DAILY_DOLLAR_VOLUME: float = 500_000
 
     # DCA (Dollar-Cost Averaging)
-    DAILY_INVESTMENT: float = 5_000.0  # $5,000/day into best stock (paper trading)
+    DAILY_INVESTMENT: float = 5_000.0  # $5,000/day into best stock (paper trading) — legacy
+    WEEKLY_INVESTMENT: float = 25_000.0  # $25,000/week spread across top 10 (Monday-only execution)
     TARGET_POSITIONS: int = 15
     NEW_POSITION_SCORE_THRESHOLD: float = 0.20  # 20% premium to open new position
     DCA_TOP_N: int = 5
+    WEEKLY_TOP_N: int = 10  # Spread across top 10 candidates on Monday
 
     # Portfolio Limits
     OPTIMIZER_CANDIDATES: int = 30
@@ -55,6 +57,11 @@ class Config:
     # Earnings Calendar
     EARNINGS_BLACKOUT_DAYS: int = 5
     EARNINGS_BOOST_DAYS: int = 10
+
+    # Order Execution Strategy
+    USE_LIMIT_ORDERS: bool = True  # Use limit orders instead of market orders
+    LIMIT_ORDER_SPREAD_PCT: float = 0.005  # 0.5% above bid price as limit
+    LIMIT_ORDER_FALLBACK_TO_MARKET: bool = True  # Fall back to market if limit not filled
 
     # Caching
     CACHE_DIR: str = "cache"

@@ -5,7 +5,12 @@ from decimal import Decimal
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, TrailingStopOrderRequest
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+    TrailingStopOrderRequest,
+)
 
 from config import Config
 
@@ -119,6 +124,63 @@ class AlpacaBroker:
             return str(order.id)
         except Exception as e:
             logger.error(f"Failed to place buy order for {symbol}: {e}")
+            return None
+
+    def buy_limit_notional(self, symbol: str, notional: float, limit_price: float) -> str | None:
+        """Place a limit buy order for a dollar amount (fractional shares).
+
+        Args:
+            symbol: Stock symbol
+            notional: Dollar amount to spend
+            limit_price: Price limit (typically bid price)
+
+        Returns: Order ID or None if failed
+        """
+        try:
+            notional = round(notional, 2)
+            # Calculate approximate quantity
+            qty = notional / limit_price if limit_price > 0 else 0
+            if qty <= 0:
+                logger.error(f"Invalid quantity ({qty}) for {symbol} at limit ${limit_price:.2f}")
+                return None
+
+            order_request = LimitOrderRequest(
+                symbol=symbol,
+                limit_price=round(limit_price, 2),
+                qty=qty,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.OPG,  # Fill at Open or cancel
+            )
+            order = self.client.submit_order(order_request)
+            logger.info(f"Limit buy order placed: {symbol} for ${notional:.2f} at limit ${limit_price:.2f}, order_id={order.id}")
+            return str(order.id)
+        except Exception as e:
+            logger.error(f"Failed to place limit buy order for {symbol}: {e}")
+            return None
+
+    def buy_limit_qty(self, symbol: str, qty: int, limit_price: float) -> str | None:
+        """Place a limit buy order for a whole number of shares.
+
+        Args:
+            symbol: Stock symbol
+            qty: Number of shares to buy
+            limit_price: Price limit (typically bid price)
+
+        Returns: Order ID or None if failed
+        """
+        try:
+            order_request = LimitOrderRequest(
+                symbol=symbol,
+                limit_price=round(limit_price, 2),
+                qty=qty,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.OPG,  # Fill at Open or cancel
+            )
+            order = self.client.submit_order(order_request)
+            logger.info(f"Limit buy order placed: {symbol} for {qty} shares at limit ${limit_price:.2f}, order_id={order.id}")
+            return str(order.id)
+        except Exception as e:
+            logger.error(f"Failed to place limit buy order for {symbol}: {e}")
             return None
 
     def get_position(self, symbol: str) -> Position | None:

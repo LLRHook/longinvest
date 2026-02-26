@@ -48,6 +48,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _is_monday() -> bool:
+    """Check if today is Monday (weekday 0)."""
+    return datetime.now().weekday() == 0
+
+
+def _get_investment_budget() -> tuple[float, int]:
+    """Get investment budget and target number of stocks.
+
+    On Monday: use WEEKLY_INVESTMENT spread across WEEKLY_TOP_N stocks.
+    Otherwise: use DAILY_INVESTMENT spread across DCA_TOP_N stocks.
+
+    Returns: (budget, num_stocks)
+    """
+    if _is_monday():
+        return Config.WEEKLY_INVESTMENT, Config.WEEKLY_TOP_N
+    else:
+        return Config.DAILY_INVESTMENT, Config.DCA_TOP_N
+
+
 def cmd_clear_cache() -> int:
     """Clear all cached data."""
     cache = CacheManager()
@@ -280,16 +299,22 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
         print("FinScan risk screening: enabled")
 
     status = broker.get_account_status()
+    investment_budget, num_targets = _get_investment_budget()
+    is_weekly = _is_monday()
 
     print("\n=== DCA Dry Run ===")
     if force_refresh:
         print("(forcing fresh data)")
     print(f"Cash: ${status.cash:,.2f}")
-    print(f"Daily investment: ${Config.DAILY_INVESTMENT:,.2f}")
+    if is_weekly:
+        print(f"Weekly investment: ${investment_budget:,.2f} (Monday execution)")
+    else:
+        print(f"Daily investment: ${investment_budget:,.2f}")
+    print(f"Target stocks: {num_targets}")
     print(f"Current positions: {len(status.positions)}")
 
-    if status.cash < Config.DAILY_INVESTMENT:
-        print(f"\nInsufficient cash (${status.cash:,.2f} < ${Config.DAILY_INVESTMENT:,.2f})")
+    if status.cash < investment_budget:
+        print(f"\nInsufficient cash (${status.cash:,.2f} < ${investment_budget:,.2f})")
         return 0
 
     # Circuit breaker checks
@@ -346,7 +371,7 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
             raw_weights[t.stock.symbol] = 1.0 / median_vol
 
     total_weight = sum(raw_weights.values())
-    allocations = {sym: (w / total_weight) * Config.DAILY_INVESTMENT for sym, w in raw_weights.items()}
+    allocations = {sym: (w / total_weight) * investment_budget for sym, w in raw_weights.items()}
 
     # Apply FinScan allocation modifiers (ELEVATED risk -> 50%)
     for target in targets:
@@ -354,7 +379,8 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
         if target.allocation_modifier < 1.0 and sym in allocations:
             allocations[sym] *= target.allocation_modifier
 
-    print(f"\nBuying {len(targets)} stocks (vol-adjusted, DRY RUN):")
+    weekly_text = " (WEEKLY - Monday)" if is_weekly else ""
+    print(f"\nBuying {len(targets)} stocks (vol-adjusted, DRY RUN{weekly_text}):")
     for target in targets:
         symbol = target.stock.symbol
         amount = allocations[symbol]
@@ -376,7 +402,7 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
 
 
 def cmd_execute(force_refresh: bool = False) -> int:
-    """Execute the daily DCA buy."""
+    """Execute the DCA buy (daily or weekly on Monday)."""
     broker = AlpacaBroker()
     fmp = FMPClient()
     cache = CacheManager()
@@ -387,17 +413,23 @@ def cmd_execute(force_refresh: bool = False) -> int:
         print("FinScan risk screening: enabled")
 
     status = broker.get_account_status()
+    investment_budget, num_targets = _get_investment_budget()
+    is_weekly = _is_monday()
 
     print("\n=== Executing DCA Buy ===")
     if force_refresh:
         print("(forcing fresh data)")
     print(f"Cash: ${status.cash:,.2f}")
-    print(f"Daily investment: ${Config.DAILY_INVESTMENT:,.2f}")
+    if is_weekly:
+        print(f"Weekly investment: ${investment_budget:,.2f} (Monday execution)")
+    else:
+        print(f"Daily investment: ${investment_budget:,.2f}")
+    print(f"Target stocks: {num_targets}")
     print(f"Current positions: {len(status.positions)}")
 
     # Check cash
-    if status.cash < Config.DAILY_INVESTMENT:
-        print(f"\nInsufficient cash (${status.cash:,.2f} < ${Config.DAILY_INVESTMENT:,.2f})")
+    if status.cash < investment_budget:
+        print(f"\nInsufficient cash (${status.cash:,.2f} < ${investment_budget:,.2f})")
         return 0
 
     # Circuit breaker: portfolio
@@ -465,7 +497,7 @@ def cmd_execute(force_refresh: bool = False) -> int:
             raw_weights[t.stock.symbol] = 1.0 / median_vol
 
     total_weight = sum(raw_weights.values())
-    allocations = {sym: (w / total_weight) * Config.DAILY_INVESTMENT for sym, w in raw_weights.items()}
+    allocations = {sym: (w / total_weight) * investment_budget for sym, w in raw_weights.items()}
 
     # Apply FinScan allocation modifiers (ELEVATED risk -> 50%)
     for target in targets:
@@ -475,7 +507,8 @@ def cmd_execute(force_refresh: bool = False) -> int:
             allocations[sym] = original * target.allocation_modifier
             logger.info(f"FinScan reduced {sym} allocation: ${original:,.2f} -> ${allocations[sym]:,.2f}")
 
-    print(f"\nBuying {len(targets)} stocks (vol-adjusted):")
+    weekly_text = " (WEEKLY - Monday)" if is_weekly else ""
+    print(f"\nBuying {len(targets)} stocks (vol-adjusted{weekly_text}):")
     bought_count = 0
     for target in targets:
         symbol = target.stock.symbol
@@ -486,23 +519,47 @@ def cmd_execute(force_refresh: bool = False) -> int:
         print(f"\n  {symbol} ({target.stock.name})")
         print(f"    Score: {target.score:.1f}/100 | Vol: {vol_pct:.0f}% | Amount: ${amount:,.2f}")
 
+        if price <= 0:
+            print(f"    Skipping: no price available")
+            continue
+
+        # Determine order type and place order
+        order_id = None
+        order_type_str = "market"
+
         fractionable = broker.is_fractionable(symbol)
-        if fractionable:
-            order_id = broker.buy_notional(symbol, amount)
-        else:
-            if price <= 0:
-                print(f"    Skipping: no price available")
-                continue
-            whole_qty = int(amount // price)
-            if whole_qty < 1:
-                print(f"    Skipping: ${amount:,.2f} < 1 share at ${price:.2f}")
-                continue
-            actual_amount = whole_qty * price
-            print(f"    Non-fractionable: buying {whole_qty} shares (~${actual_amount:,.2f})")
-            order_id = broker.buy_qty(symbol, whole_qty)
+
+        # Try limit order first if enabled
+        if Config.USE_LIMIT_ORDERS:
+            limit_price = price * (1 + Config.LIMIT_ORDER_SPREAD_PCT)
+            order_type_str = f"limit@${limit_price:.2f}"
+
+            if fractionable:
+                order_id = broker.buy_limit_notional(symbol, amount, limit_price)
+            else:
+                whole_qty = int(amount // price)
+                if whole_qty >= 1:
+                    order_id = broker.buy_limit_qty(symbol, whole_qty, limit_price)
+
+            # Fall back to market order if limit order failed and configured
+            if not order_id and Config.LIMIT_ORDER_FALLBACK_TO_MARKET:
+                logger.info(f"Limit order failed for {symbol}, falling back to market order")
+                order_type_str = "market (fallback)"
+
+        # Fall back to market if limit not enabled or failed
+        if not order_id:
+            if fractionable:
+                order_id = broker.buy_notional(symbol, amount)
+            else:
+                whole_qty = int(amount // price)
+                if whole_qty < 1:
+                    print(f"    Skipping: ${amount:,.2f} < 1 share at ${price:.2f}")
+                    continue
+                print(f"    Non-fractionable: buying {whole_qty} shares (~${whole_qty * price:,.2f})")
+                order_id = broker.buy_qty(symbol, whole_qty)
 
         if order_id:
-            print(f"    Order placed: {order_id}")
+            print(f"    Order placed ({order_type_str}): {order_id}")
             qty_est = amount / price if price > 0 else 0
             tracker.record_buy(symbol=symbol, price=price, quantity=qty_est)
             bought_count += 1
