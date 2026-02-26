@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: '30 14 * * 1-5'  # Market open execute (~9:30 AM ET)
     - cron: '30 21 * * 1-5'  # Daily report (~4:30 PM ET)
+    - cron: '0 18 * * 1'    # Monday FinScan monitor (~1:00 PM ET)
 
   workflow_dispatch:
     inputs:
@@ -17,12 +18,14 @@ on:
           - dry-run
           - execute
           - status
+          - monitor
 
 env:
   ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
   ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
   FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
   DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+  FINSCAN_API_KEY: ${{ secrets.FINSCAN_API_KEY }}
   ENABLE_NOTIFICATIONS: 'true'
 
 jobs:
@@ -88,6 +91,9 @@ jobs:
           elif [ "$ET_HOUR" -eq 16 ] || [ "$ET_HOUR" -eq 17 ]; then
             echo "action=report" >> $GITHUB_OUTPUT
             echo "Scheduled: Market close - sending daily report"
+          elif [ "$(date -u +%u)" -eq 1 ] && ([ "$ET_HOUR" -eq 13 ] || [ "$ET_HOUR" -eq 14 ]); then
+            echo "action=monitor" >> $GITHUB_OUTPUT
+            echo "Scheduled: Monday - FinScan portfolio monitor"
           else
             echo "Scheduled: ET hour $ET_HOUR does not match any action window — skipping"
             echo "action=skip" >> $GITHUB_OUTPUT
@@ -108,3 +114,7 @@ jobs:
       - name: Send daily report
         if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'report'
         run: python main.py --report
+
+      - name: FinScan portfolio monitor
+        if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'monitor'
+        run: python main.py --monitor

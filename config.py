@@ -60,6 +60,13 @@ class Config:
     CACHE_DIR: str = "cache"
     CACHE_TTL_HOURS: int = 24  # 1 day TTL for all cached data
 
+    # FinScan
+    FINSCAN_API_KEY: str = os.getenv("FINSCAN_API_KEY", "")
+    FINSCAN_BASE_URL: str = os.getenv("FINSCAN_BASE_URL", "https://finscan.io")
+    FINSCAN_HIGH_RISK_THRESHOLD: int = 70
+    FINSCAN_ELEVATED_RISK_THRESHOLD: int = 50
+    FINSCAN_MIN_PIOTROSKI: int = 4
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return list of missing required config values."""

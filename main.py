@@ -22,10 +22,13 @@ from src.charter import (
     calculate_cumulative_returns,
     generate_performance_chart,
 )
+from src.finscan import FinScanClient
 from src.notifier import (
     format_circuit_breaker_embed,
     format_dca_buy_embed,
     format_dca_summary_embed,
+    format_finscan_alert_embed,
+    format_finscan_reject_embed,
     format_performance_embed,
     format_screening_embed,
     send_discord_chart_message,
@@ -226,6 +229,13 @@ def _compute_candidate_volatilities(prices_df: pd.DataFrame) -> dict[str, float]
     return vols
 
 
+def _init_finscan(cache: CacheManager | None = None) -> FinScanClient | None:
+    """Initialize FinScan client if API key is configured."""
+    if Config.FINSCAN_API_KEY:
+        return FinScanClient(Config.FINSCAN_API_KEY, Config.FINSCAN_BASE_URL, cache=cache)
+    return None
+
+
 def cmd_screen(force_refresh: bool = False) -> int:
     """Run screener and display multi-factor results."""
     fmp = FMPClient()
@@ -265,6 +275,9 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
     fmp = FMPClient()
     cache = CacheManager()
     strategy = MultiFactorStrategy(fmp, cache=cache, force_refresh=force_refresh)
+    finscan = _init_finscan(cache)
+    if finscan:
+        print("FinScan risk screening: enabled")
 
     status = broker.get_account_status()
 
@@ -314,6 +327,7 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
         positions=status.positions,
         portfolio_value=status.portfolio_value,
         momentum_signals=momentum,
+        finscan=finscan,
     )
 
     if not targets:
@@ -334,6 +348,12 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
     total_weight = sum(raw_weights.values())
     allocations = {sym: (w / total_weight) * Config.DAILY_INVESTMENT for sym, w in raw_weights.items()}
 
+    # Apply FinScan allocation modifiers (ELEVATED risk -> 50%)
+    for target in targets:
+        sym = target.stock.symbol
+        if target.allocation_modifier < 1.0 and sym in allocations:
+            allocations[sym] *= target.allocation_modifier
+
     print(f"\nBuying {len(targets)} stocks (vol-adjusted, DRY RUN):")
     for target in targets:
         symbol = target.stock.symbol
@@ -343,6 +363,10 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
         print(f"    Score: {target.score:.1f}/100 | Vol: {vol_pct:.0f}% | Amount: ${amount:,.2f}")
         print(f"    Price: ${target.stock.price:.2f}")
         print(f"    Sector: {target.stock.sector}")
+        if target.finscan_result:
+            fs = target.finscan_result
+            pio_str = f" | Piotroski: {fs.piotroski_score}/9" if fs.piotroski_score is not None else ""
+            print(f"    FinScan: {fs.composite_score}/100 ({fs.risk_rating}){pio_str}")
         for reason in target.reasons:
             print(f"    - {reason}")
 
@@ -358,6 +382,9 @@ def cmd_execute(force_refresh: bool = False) -> int:
     cache = CacheManager()
     strategy = MultiFactorStrategy(fmp, cache=cache, force_refresh=force_refresh)
     tracker = TradeTracker()
+    finscan = _init_finscan(cache)
+    if finscan:
+        print("FinScan risk screening: enabled")
 
     status = broker.get_account_status()
 
@@ -418,6 +445,7 @@ def cmd_execute(force_refresh: bool = False) -> int:
         positions=status.positions,
         portfolio_value=status.portfolio_value,
         momentum_signals=momentum,
+        finscan=finscan,
     )
 
     if not targets:
@@ -438,6 +466,14 @@ def cmd_execute(force_refresh: bool = False) -> int:
 
     total_weight = sum(raw_weights.values())
     allocations = {sym: (w / total_weight) * Config.DAILY_INVESTMENT for sym, w in raw_weights.items()}
+
+    # Apply FinScan allocation modifiers (ELEVATED risk -> 50%)
+    for target in targets:
+        sym = target.stock.symbol
+        if target.allocation_modifier < 1.0 and sym in allocations:
+            original = allocations[sym]
+            allocations[sym] = original * target.allocation_modifier
+            logger.info(f"FinScan reduced {sym} allocation: ${original:,.2f} -> ${allocations[sym]:,.2f}")
 
     print(f"\nBuying {len(targets)} stocks (vol-adjusted):")
     bought_count = 0
@@ -511,6 +547,55 @@ def cmd_execute(force_refresh: bool = False) -> int:
     return 0 if bought_count > 0 else 1
 
 
+def cmd_monitor() -> int:
+    """Scan all held positions through FinScan for risk monitoring."""
+    if not Config.FINSCAN_API_KEY:
+        print("FinScan API key not configured. Set FINSCAN_API_KEY.")
+        return 1
+
+    broker = AlpacaBroker()
+    cache = CacheManager()
+    finscan = FinScanClient(Config.FINSCAN_API_KEY, Config.FINSCAN_BASE_URL, cache=cache)
+
+    status = broker.get_account_status()
+    print(f"\n=== FinScan Portfolio Monitor ===")
+    print(f"Scanning {len(status.positions)} held positions...\n")
+
+    alerts = []
+    for p in status.positions:
+        result = finscan.scan(p.symbol)
+        if result:
+            flag_str = f" | {len(result.red_flags)} flags" if result.red_flags else ""
+            pio_str = f" | F-Score: {result.piotroski_score}/9" if result.piotroski_score is not None else ""
+            print(f"  {p.symbol:8} Risk: {result.composite_score:3}/100 ({result.risk_rating:9}){pio_str}{flag_str}")
+
+            if result.risk_rating in ("HIGH", "ELEVATED"):
+                alerts.append((p.symbol, result))
+        else:
+            print(f"  {p.symbol:8} [scan failed]")
+
+    if alerts:
+        print(f"\n=== {len(alerts)} Alert(s) ===")
+        for symbol, result in alerts:
+            print(f"  {symbol}: {result.risk_rating} ({result.composite_score}/100)")
+            for flag in result.red_flags[:5]:
+                print(f"    [{flag.get('severity', '?')}] {flag.get('message', 'N/A')}")
+
+            # Send Discord alert
+            if Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:
+                embed = format_finscan_alert_embed(
+                    symbol=symbol,
+                    composite_score=result.composite_score,
+                    risk_rating=result.risk_rating,
+                    red_flags=result.red_flags,
+                )
+                send_discord_notification(Config.DISCORD_WEBHOOK_URL, embed)
+    else:
+        print("\nNo alerts — all positions within risk tolerance.")
+
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Multi-Factor DCA investment bot",
@@ -551,6 +636,11 @@ def main() -> int:
         action="store_true",
         help="Delete all cached files and exit",
     )
+    parser.add_argument(
+        "--monitor",
+        action="store_true",
+        help="Scan held positions through FinScan for risk alerts",
+    )
 
     args = parser.parse_args()
 
@@ -565,7 +655,7 @@ def main() -> int:
     missing = Config.validate()
     if missing:
         # Allow certain commands with partial config
-        if not (args.status or args.screen or args.dry_run or args.report):
+        if not (args.status or args.screen or args.dry_run or args.report or args.monitor):
             print(f"Error: Missing required configuration: {', '.join(missing)}")
             print("Copy .env.example to .env and fill in your API keys.")
             return 1
@@ -588,6 +678,8 @@ def main() -> int:
             return cmd_dry_run(force_refresh=args.force_refresh)
         elif args.report:
             return cmd_report(dry_run=args.dry_run)
+        elif args.monitor:
+            return cmd_monitor()
         else:
             return cmd_execute(force_refresh=args.force_refresh)
     except Exception as e:

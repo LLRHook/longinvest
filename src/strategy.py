@@ -13,6 +13,7 @@ from src.cache import (
     stock_data_to_dict,
 )
 from src.data import FMPClient, StockData
+from src.finscan import FinScanClient, FinScanResult
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,8 @@ class ScoredStock:
     stock: StockData
     score: float
     reasons: list[str]
+    finscan_result: FinScanResult | None = None
+    allocation_modifier: float = 1.0  # 1.0 = full, 0.5 = reduced (ELEVATED risk)
 
 
 # Factor weights (must sum to 1.0)
@@ -340,6 +343,7 @@ class MultiFactorStrategy:
         positions: list,
         portfolio_value: float,
         momentum_signals: dict[str, float] | None = None,
+        finscan: FinScanClient | None = None,
     ) -> list[ScoredStock]:
         """Pick up to DCA_TOP_N best stocks for today's DCA buys.
 
@@ -382,6 +386,56 @@ class MultiFactorStrategy:
             logger.info("No scored stocks available for DCA")
             return []
 
+        # FinScan risk gate: scan top candidates and filter/annotate
+        if finscan:
+            scan_limit = min(len(scored), Config.OPTIMIZER_CANDIDATES)
+            for candidate in scored[:scan_limit]:
+                result = finscan.scan(candidate.stock.symbol)
+                if result:
+                    candidate.finscan_result = result
+
+                    # Hard reject: HIGH composite risk
+                    if result.composite_score >= Config.FINSCAN_HIGH_RISK_THRESHOLD:
+                        candidate.allocation_modifier = 0.0
+                        candidate.reasons.append(
+                            f"FinScan HIGH risk ({result.composite_score}/100) — REJECTED"
+                        )
+                        logger.info(f"FinScan rejected {candidate.stock.symbol}: HIGH risk ({result.composite_score})")
+                        continue
+
+                    # Hard reject: Beneish likely manipulator
+                    if result.beneish_signal == "LIKELY_MANIPULATOR":
+                        candidate.allocation_modifier = 0.0
+                        candidate.reasons.append("Beneish: LIKELY_MANIPULATOR — REJECTED")
+                        logger.info(f"FinScan rejected {candidate.stock.symbol}: Beneish LIKELY_MANIPULATOR")
+                        continue
+
+                    # Hard reject: Piotroski weak (0-3)
+                    if result.piotroski_score is not None and result.piotroski_score < Config.FINSCAN_MIN_PIOTROSKI:
+                        candidate.allocation_modifier = 0.0
+                        candidate.reasons.append(
+                            f"Piotroski WEAK ({result.piotroski_score}/9) — REJECTED"
+                        )
+                        logger.info(f"FinScan rejected {candidate.stock.symbol}: Piotroski {result.piotroski_score}/9")
+                        continue
+
+                    # Soft penalty: ELEVATED risk reduces allocation
+                    if result.composite_score >= Config.FINSCAN_ELEVATED_RISK_THRESHOLD:
+                        candidate.allocation_modifier = 0.5
+                        candidate.reasons.append(
+                            f"FinScan ELEVATED risk ({result.composite_score}/100) — 50% allocation"
+                        )
+
+                    # Piotroski bonus: STRONG (7-9) gets +5 points
+                    if result.piotroski_score is not None and result.piotroski_score >= 7:
+                        candidate.score += 5.0
+                        candidate.reasons.append(
+                            f"Piotroski STRONG ({result.piotroski_score}/9, +5pts)"
+                        )
+
+            # Re-sort after Piotroski bonuses
+            scored.sort(key=lambda x: x.score, reverse=True)
+
         # Build sector map from scored stocks
         for s in scored:
             if s.stock.symbol in held_symbols:
@@ -409,6 +463,10 @@ class MultiFactorStrategy:
         for candidate in scored:
             if len(targets) >= Config.DCA_TOP_N:
                 break
+
+            # Skip FinScan-rejected candidates
+            if candidate.allocation_modifier == 0.0:
+                continue
 
             symbol = candidate.stock.symbol
             sector = candidate.stock.sector or "Unknown"
