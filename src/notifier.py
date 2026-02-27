@@ -381,41 +381,23 @@ def format_performance_embed(report_data: dict[str, Any]) -> dict[str, Any]:
     # Build position fields
     fields = []
 
-    # Top performers (up to 3) - show positions with positive intraday P/L
-    top_performers = [p for p in sorted_positions if p["intraday_pl"] > 0][:3]
-    if top_performers:
-        top_lines = [
-            f"`{p['symbol']:6}` +${p['intraday_pl']:.2f} ({'+' if p['change_today'] >= 0 else ''}{p['change_today']:.2%})"
-            for p in top_performers
-        ]
+    # Compact positions table
+    if sorted_positions:
+        header = f"{'Sym':<6} {'Value':>8} {'Today':>8} {'Total':>8}"
+        sep = "-" * len(header)
+        rows = []
+        for p in sorted_positions:
+            sym = p["symbol"][:6]
+            val = f"${p['market_value']:,.0f}"
+            today_sign = "+" if p["intraday_pl"] >= 0 else ""
+            today = f"{today_sign}${p['intraday_pl']:,.0f}"
+            total_sign = "+" if p["unrealized_pl"] >= 0 else ""
+            total = f"{total_sign}${p['unrealized_pl']:,.0f}"
+            rows.append(f"{sym:<6} {val:>8} {today:>8} {total:>8}")
+        table = f"```\n{header}\n{sep}\n" + "\n".join(rows) + "\n```"
         fields.append({
-            "name": "🚀 Top Performers",
-            "value": "\n".join(top_lines),
-            "inline": True,
-        })
-
-    # Laggards (up to 3) - show positions with negative intraday P/L
-    laggards = [p for p in reversed(sorted_positions) if p["intraday_pl"] < 0][:3]
-    if laggards:
-        lag_lines = [
-            f"`{p['symbol']:6}` ${p['intraday_pl']:.2f} ({p['change_today']:.2%})"
-            for p in laggards
-        ]
-        fields.append({
-            "name": "📉 Laggards",
-            "value": "\n".join(lag_lines),
-            "inline": True,
-        })
-
-    # Add all positions summary if more than 6
-    if len(positions) > 6:
-        all_lines = [
-            f"`{p['symbol']:6}` {'+' if p['intraday_pl'] >= 0 else ''}${p['intraday_pl']:.2f}"
-            for p in sorted_positions
-        ]
-        fields.append({
-            "name": f"📊 All Positions ({len(positions)})",
-            "value": "\n".join(all_lines),
+            "name": f"📊 Positions ({len(sorted_positions)})",
+            "value": table,
             "inline": False,
         })
 
