@@ -78,6 +78,72 @@ def cmd_clear_cache() -> int:
     return 0
 
 
+def cmd_reset() -> int:
+    """Wipe Alpaca account clean and clear all local tracking data.
+
+    - Cancels all open orders
+    - Closes all positions
+    - Clears trade history (data/trade_history.json)
+    - Clears deposit history (deposits.json)
+    - Clears cache
+    """
+    print("\n=== ACCOUNT RESET ===")
+
+    broker = AlpacaBroker()
+
+    # 1. Cancel all open orders
+    print("\n[1/5] Cancelling all open orders...")
+    try:
+        cancelled = broker.client.cancel_orders()
+        print(f"  Cancelled {len(cancelled)} orders.")
+    except Exception as e:
+        print(f"  Error cancelling orders: {e}")
+
+    # 2. Close all positions
+    print("\n[2/5] Closing all positions...")
+    try:
+        closed = broker.client.close_all_positions(cancel_orders=True)
+        print(f"  Closed {len(closed)} positions.")
+        for resp in closed:
+            sym = resp.symbol if hasattr(resp, "symbol") else resp
+            print(f"    - {sym}")
+    except Exception as e:
+        print(f"  Error closing positions: {e}")
+
+    # 3. Clear trade history
+    print("\n[3/5] Clearing trade history...")
+    from src.tracker import HISTORY_FILE
+    if HISTORY_FILE.exists():
+        HISTORY_FILE.unlink()
+        print(f"  Deleted {HISTORY_FILE}")
+    else:
+        print("  No trade history file found.")
+
+    # 4. Clear deposit history
+    print("\n[4/5] Clearing deposit history...")
+    from src.deposits import DEPOSITS_FILE
+    if os.path.exists(DEPOSITS_FILE):
+        os.remove(DEPOSITS_FILE)
+        print(f"  Deleted {DEPOSITS_FILE}")
+    else:
+        print("  No deposit history file found.")
+
+    # 5. Clear cache
+    print("\n[5/5] Clearing cache...")
+    cache = CacheManager()
+    deleted = cache.clear()
+    print(f"  Cleared {deleted} cache files.")
+
+    # Show final state
+    status = broker.get_account_status()
+    print(f"\n=== Account After Reset ===")
+    print(f"  Cash:            ${status.cash:,.2f}")
+    print(f"  Portfolio value:  ${status.portfolio_value:,.2f}")
+    print(f"  Positions:        {len(status.positions)}")
+    print(f"\nReset complete. Starting fresh.")
+    return 0
+
+
 def cmd_report(dry_run: bool = False) -> int:
     """Generate and send daily performance report."""
     print("\n=== Generating Daily Report ===")
@@ -752,6 +818,11 @@ def main() -> int:
         action="store_true",
         help="Delete all cached files and exit",
     )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Wipe account: cancel orders, close positions, clear all tracking data",
+    )
     args = parser.parse_args()
 
     if args.debug:
@@ -760,6 +831,13 @@ def main() -> int:
     # Handle clear-cache before validation (no API keys needed)
     if args.clear_cache:
         return cmd_clear_cache()
+
+    # Handle reset (needs Alpaca keys only)
+    if args.reset:
+        if not Config.ALPACA_API_KEY or not Config.ALPACA_SECRET_KEY:
+            print("Error: Alpaca keys required for --reset")
+            return 1
+        return cmd_reset()
 
     # Validate configuration
     missing = Config.validate()

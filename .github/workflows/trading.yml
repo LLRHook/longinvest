@@ -17,6 +17,7 @@ on:
           - dry-run
           - execute
           - status
+          - reset
 env:
   ALPACA_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
   ALPACA_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
@@ -107,4 +108,8 @@ jobs:
       - name: Send daily report
         if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'report'
         run: python main.py --report
+
+      - name: Reset account (wipe clean)
+        if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'reset'
+        run: python main.py --reset
 
