@@ -171,13 +171,13 @@ From FinScan audit (Feb 25, 2026):
 |-------|-------|--------|--------|--------|---------------|
 | 1 | 1a — Multi-stock buys | DONE | Small (config + minor code) | Very high | 45/100 |
 | 2 | 2a-2b — FinScan risk filter | DONE | Medium (new API client) | High | 52/100 |
-| 3 | 3a — Weekly rebalancing | IN PROGRESS | Small (cron + config) | High | 58/100 |
+| 3 | 3a — Weekly rebalancing | DONE | Small (cron + config) | High | 58/100 |
 | 4 | 1b — Vol-adjusted sizing | DONE | Medium (new sizing logic) | Medium | 62/100 |
 | 5 | 1c — Tighter guardrails | DONE | Small (config changes) | Medium | 65/100 |
 | 6 | 4 — Backtest & validate | PENDING | Large (new data + framework) | Critical for confidence | 65/100 (validated) |
 | 7 | 2c-2d — Piotroski + monitoring | PENDING | Medium | Medium | 70/100 |
-| 8 | 3b — Limit orders | IN PROGRESS | Medium | Medium | 75/100 |
-| 9 | 3c — ATR stops | PENDING | Medium | Medium | 75/100 |
+| 8 | 3b — Limit orders | DONE | Medium | Medium | 75/100 |
+| 9 | 3c — ATR trailing stops | IN PROGRESS | Medium | Medium | 78/100 |
 | 10 | 5 — FinScan hardening | PENDING | Medium | Low (for longinvest) | 75/100 |
 
 ---

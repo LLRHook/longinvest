@@ -327,6 +327,217 @@ class FMPClient:
             logger.error(f"Error fetching data for {symbol}: {e}")
             return None
 
+    def get_stock_data_batch(self, symbols: list[str]) -> dict[str, StockData | None]:
+        """Fetch and combine data for multiple stocks using batch endpoints.
+
+        Uses batch quote and profile endpoints (2 API calls total) then
+        fetches per-symbol ratios, metrics, growth, surprises, and earnings
+        calendar in parallel.  Reduces total calls from 7*N to 2 + 5*N.
+        """
+        if not symbols:
+            return {}
+
+        # Step 1: batch fetch quotes and profiles (2 API calls)
+        batch_quotes = self.get_batch_quotes(symbols)
+        batch_profiles = self.get_batch_profiles(symbols)
+
+        # If both batch calls failed, fall back to individual calls
+        if not batch_quotes and not batch_profiles:
+            logger.warning("Batch endpoints failed, falling back to individual calls")
+            results: dict[str, StockData | None] = {}
+            with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
+                futures = {
+                    executor.submit(self.get_stock_data, sym): sym for sym in symbols
+                }
+                for future in as_completed(futures):
+                    sym = futures[future]
+                    try:
+                        results[sym] = future.result()
+                    except Exception as e:
+                        logger.error(f"Fallback fetch failed for {sym}: {e}")
+                        results[sym] = None
+            return results
+
+        # Step 2: for each symbol, fetch the 5 individual endpoints in parallel
+        def _fetch_individual(symbol: str) -> tuple[str, dict]:
+            """Fetch ratios, metrics, growth, surprises, earnings_calendar."""
+            with ThreadPoolExecutor(max_workers=5) as inner:
+                f_ratios = inner.submit(self.get_ratios_ttm, symbol)
+                f_metrics = inner.submit(self.get_key_metrics_ttm, symbol)
+                f_growth = inner.submit(self.get_financial_growth, symbol, 4)
+                f_surprises = inner.submit(self.get_earnings_surprises, symbol)
+                f_earnings_cal = inner.submit(self.get_earnings_calendar, symbol)
+
+            return symbol, {
+                "ratios": f_ratios.result(),
+                "metrics": f_metrics.result(),
+                "growth": f_growth.result(),
+                "surprises": f_surprises.result(),
+                "earnings_cal": f_earnings_cal.result(),
+            }
+
+        individual_data: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
+            futures = {
+                executor.submit(_fetch_individual, sym): sym for sym in symbols
+            }
+            for future in as_completed(futures):
+                sym = futures[future]
+                try:
+                    sym_key, data = future.result()
+                    individual_data[sym_key] = data
+                except Exception as e:
+                    logger.error(f"Individual fetch failed for {sym}: {e}")
+
+        # Step 3: assemble StockData objects
+        results: dict[str, StockData | None] = {}
+        for symbol in symbols:
+            try:
+                profile = batch_profiles.get(symbol)
+                if not profile:
+                    logger.warning(f"No profile found for {symbol} in batch")
+                    results[symbol] = None
+                    continue
+
+                quote = batch_quotes.get(symbol)
+                ind = individual_data.get(symbol, {})
+                ratios = ind.get("ratios")
+                metrics = ind.get("metrics")
+                growth = ind.get("growth", [])
+                surprises = ind.get("surprises", [])
+                earnings_cal = ind.get("earnings_cal", [])
+
+                growth_data = growth[0] if growth else {}
+
+                # Earnings momentum: count EPS beats in last 4 quarters
+                eps_beat_count = 0
+                if surprises:
+                    for s in surprises[:4]:
+                        actual = s.get("actualEarningResult")
+                        estimated = s.get("estimatedEarning")
+                        if actual is not None and estimated is not None and actual > estimated:
+                            eps_beat_count += 1
+
+                # Earnings growth from financial-growth (most recent quarter)
+                earnings_growth = growth_data.get("epsgrowth") or growth_data.get("netIncomeGrowth")
+
+                # Earnings acceleration
+                earnings_growth_accelerating = False
+                if len(growth) >= 3:
+                    eg_values = []
+                    for g in growth[:4]:
+                        val = g.get("epsgrowth") or g.get("netIncomeGrowth")
+                        if val is not None:
+                            eg_values.append(val)
+                    if len(eg_values) >= 3:
+                        earnings_growth_accelerating = eg_values[0] > sum(eg_values[1:]) / len(eg_values[1:])
+
+                # Revenue acceleration
+                revenue_growth_accelerating = False
+                if len(growth) >= 3:
+                    rg_values = []
+                    for g in growth[:4]:
+                        val = g.get("revenueGrowth")
+                        if val is not None:
+                            rg_values.append(val)
+                    if len(rg_values) >= 3:
+                        revenue_growth_accelerating = rg_values[0] > sum(rg_values[1:]) / len(rg_values[1:])
+
+                # Revenue
+                revenue = metrics.get("revenuePerShareTTM") if metrics else None
+                if revenue is not None and quote:
+                    shares = quote.get("sharesOutstanding")
+                    if shares:
+                        revenue = revenue * shares
+                    else:
+                        revenue = None
+
+                # Valuation ratios
+                pe_ratio = ratios.get("peRatioTTM") if ratios else None
+                peg_ratio = ratios.get("pegRatioTTM") if ratios else None
+                price_to_book = ratios.get("priceToBookRatioTTM") if ratios else None
+                ev_to_ebitda = metrics.get("enterpriseValueOverEBITDATTM") if metrics else None
+                enterprise_value = metrics.get("enterpriseValueTTM") if metrics else None
+
+                # FCF margin
+                fcf = metrics.get("freeCashFlowTTM") if metrics else None
+                fcf_margin = None
+                if fcf is not None and revenue is not None and revenue > 0:
+                    fcf_margin = fcf / revenue
+
+                # Quarterly EPS actuals
+                quarterly_eps_values = None
+                if surprises:
+                    eps_vals = []
+                    for s in surprises[:4]:
+                        actual = s.get("actualEarningResult")
+                        if actual is not None:
+                            eps_vals.append(float(actual))
+                    if eps_vals:
+                        quarterly_eps_values = eps_vals
+
+                # Earnings calendar
+                next_earnings_date = None
+                days_since_last_earnings = None
+                today = datetime.now().date()
+                if earnings_cal:
+                    future_dates = []
+                    past_dates = []
+                    for ec in earnings_cal:
+                        date_str = ec.get("date")
+                        if not date_str:
+                            continue
+                        try:
+                            ec_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                            if ec_date >= today:
+                                future_dates.append(ec_date)
+                            else:
+                                past_dates.append(ec_date)
+                        except ValueError:
+                            continue
+                    if future_dates:
+                        next_earnings_date = min(future_dates).isoformat()
+                    if past_dates:
+                        last_earnings = max(past_dates)
+                        days_since_last_earnings = (today - last_earnings).days
+
+                results[symbol] = StockData(
+                    symbol=symbol,
+                    name=profile.get("companyName", ""),
+                    price=quote.get("price", 0) if quote else profile.get("price", 0),
+                    market_cap=profile.get("mktCap", 0),
+                    sector=profile.get("sector", ""),
+                    country=profile.get("country", ""),
+                    is_etf=profile.get("isEtf", False),
+                    is_actively_trading=profile.get("isActivelyTrading", True),
+                    de_ratio=ratios.get("debtEquityRatioTTM") if ratios else None,
+                    roe=metrics.get("roeTTM") if metrics else None,
+                    gross_margin=ratios.get("grossProfitMarginTTM") if ratios else None,
+                    revenue_growth=growth_data.get("revenueGrowth"),
+                    free_cash_flow=metrics.get("freeCashFlowTTM") if metrics else None,
+                    free_cash_flow_growth=growth_data.get("freeCashFlowGrowth"),
+                    revenue=revenue,
+                    pe_ratio=pe_ratio,
+                    peg_ratio=peg_ratio,
+                    price_to_book=price_to_book,
+                    ev_to_ebitda=ev_to_ebitda,
+                    enterprise_value=enterprise_value,
+                    fcf_margin=fcf_margin,
+                    earnings_growth=earnings_growth,
+                    eps_beat_count=eps_beat_count,
+                    quarterly_eps_values=quarterly_eps_values,
+                    earnings_growth_accelerating=earnings_growth_accelerating,
+                    revenue_growth_accelerating=revenue_growth_accelerating,
+                    next_earnings_date=next_earnings_date,
+                    days_since_last_earnings=days_since_last_earnings,
+                    avg_volume=quote.get("avgVolume") if quote else None,
+                )
+            except Exception as e:
+                logger.error(f"Error building StockData for {symbol}: {e}")
+                results[symbol] = None
+
+        return results
+
     def get_screener_stocks(
         self,
         min_market_cap: float = 300e6,

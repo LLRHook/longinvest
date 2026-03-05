@@ -35,10 +35,15 @@ from src.notifier import (
     send_discord_notification,
     send_discord_notification_with_chart,
 )
-from src.optimizer import compute_individual_stats
+from src.optimizer import apply_momentum_tilt, compute_individual_stats
 from src.reporter import format_console_report, generate_daily_report
 from src.strategy import MultiFactorStrategy
-from src.technicals import apply_technical_filters, compute_price_momentum_12_1
+from src.technicals import (
+    apply_technical_filters,
+    compute_atr,
+    compute_momentum_percentiles,
+    compute_price_momentum_12_1,
+)
 from src.tracker import TradeTracker
 
 logging.basicConfig(
@@ -255,6 +260,72 @@ def _init_finscan(cache: CacheManager | None = None) -> FinScanClient | None:
     return None
 
 
+def _check_intraday_momentum(fmp: FMPClient, symbol: str) -> bool:
+    """Check if a stock's intraday momentum is acceptable for buying.
+
+    Returns False if the stock is down more than INTRADAY_MIN_CHANGE today.
+    """
+    if not Config.INTRADAY_CHECK_ENABLED:
+        return True
+
+    quote = fmp.get_quote(symbol)
+    if not quote:
+        return True  # No data — allow the buy
+
+    price = quote.get("price", 0)
+    prev_close = quote.get("previousClose", 0)
+    if prev_close <= 0:
+        return True
+
+    change = (price - prev_close) / prev_close
+    if change < Config.INTRADAY_MIN_CHANGE:
+        logger.info(f"Intraday check failed for {symbol}: {change:.2%} < {Config.INTRADAY_MIN_CHANGE:.0%}")
+        return False
+    return True
+
+
+def _place_trailing_stops(broker, prices_df: pd.DataFrame, positions) -> None:
+    """Place trailing stop orders for all positions based on ATR.
+
+    Uses ATR-based trailing stops, tightening the stop for positions
+    that have exceeded the profit threshold.
+    """
+    if not Config.TRAILING_STOP_ENABLED:
+        return
+
+    atr_values = compute_atr(prices_df, Config.TRAILING_STOP_ATR_PERIOD)
+
+    for pos in positions:
+        symbol = pos.symbol
+        if symbol not in atr_values:
+            logger.warning(f"No ATR data for {symbol}, skipping trailing stop")
+            continue
+
+        atr = atr_values[symbol]
+        if atr <= 0:
+            logger.warning(f"Zero ATR for {symbol}, skipping trailing stop")
+            continue
+
+        price = pos.current_price
+        if price <= 0:
+            continue
+
+        # Choose multiplier: tighter if position has exceeded profit threshold
+        multiplier = Config.TRAILING_STOP_ATR_MULTIPLIER
+        if pos.unrealized_plpc > Config.TRAILING_STOP_PROFIT_THRESHOLD:
+            multiplier = Config.TRAILING_STOP_TIGHT_MULTIPLIER
+
+        trail_pct = (atr * multiplier) / price
+        trail_pct = max(Config.TRAILING_STOP_MIN_PCT, min(Config.TRAILING_STOP_MAX_PCT, trail_pct))
+
+        trail_percent = round(trail_pct * 100, 2)
+        order_id = broker.place_trailing_stop(symbol, float(pos.qty), trail_percent)
+        if order_id:
+            logger.info(f"Trailing stop for {symbol}: {trail_percent:.1f}% (ATR={atr:.2f}, mult={multiplier})")
+        else:
+            logger.warning(f"Failed to place trailing stop for {symbol}")
+
+
 def cmd_screen(force_refresh: bool = False) -> int:
     """Run screener and display multi-factor results."""
     fmp = FMPClient()
@@ -379,14 +450,24 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
         if target.allocation_modifier < 1.0 and sym in allocations:
             allocations[sym] *= target.allocation_modifier
 
+    # Apply momentum tilt (Task 14)
+    if Config.MOMENTUM_TILT_ENABLED and not prices_df.empty:
+        momentum_pcts = compute_momentum_percentiles(prices_df)
+        if momentum_pcts:
+            allocations = apply_momentum_tilt(allocations, momentum_pcts, Config.MOMENTUM_TILT_FACTOR)
+            print(f"  Momentum tilt applied (factor={Config.MOMENTUM_TILT_FACTOR})")
+
     weekly_text = " (WEEKLY - Monday)" if is_weekly else ""
     print(f"\nBuying {len(targets)} stocks (vol-adjusted, DRY RUN{weekly_text}):")
     for target in targets:
         symbol = target.stock.symbol
         amount = allocations[symbol]
         vol_pct = vols.get(symbol, 0) * 100
+        intraday_ok = _check_intraday_momentum(fmp, symbol)
+        intraday_str = "OK" if intraday_ok else "SKIP (down too much)"
         print(f"\n  {symbol} ({target.stock.name})")
         print(f"    Score: {target.score:.1f}/100 | Vol: {vol_pct:.0f}% | Amount: ${amount:,.2f}")
+        print(f"    Intraday check: {intraday_str}")
         print(f"    Price: ${target.stock.price:.2f}")
         print(f"    Sector: {target.stock.sector}")
         if target.finscan_result:
@@ -395,6 +476,22 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
             print(f"    FinScan: {fs.composite_score}/100 ({fs.risk_rating}){pio_str}")
         for reason in target.reasons:
             print(f"    - {reason}")
+
+    # Show trailing stop info
+    if Config.TRAILING_STOP_ENABLED and status.positions and not prices_df.empty:
+        atr_values = compute_atr(prices_df, Config.TRAILING_STOP_ATR_PERIOD)
+        if atr_values:
+            print(f"\n=== Trailing Stops (would be placed) ===")
+            for pos in status.positions:
+                atr = atr_values.get(pos.symbol)
+                if atr and pos.current_price > 0:
+                    multiplier = Config.TRAILING_STOP_ATR_MULTIPLIER
+                    if pos.unrealized_plpc > Config.TRAILING_STOP_PROFIT_THRESHOLD:
+                        multiplier = Config.TRAILING_STOP_TIGHT_MULTIPLIER
+                    trail_pct = (atr * multiplier) / pos.current_price
+                    trail_pct = max(Config.TRAILING_STOP_MIN_PCT, min(Config.TRAILING_STOP_MAX_PCT, trail_pct))
+                    tight_str = " (tightened)" if multiplier == Config.TRAILING_STOP_TIGHT_MULTIPLIER else ""
+                    print(f"  {pos.symbol}: {trail_pct*100:.1f}% trail{tight_str}")
 
     print(f"\nTotal API calls: {fmp.get_api_call_count()}")
     print("\n[DRY RUN - No trades executed]")
@@ -507,6 +604,13 @@ def cmd_execute(force_refresh: bool = False) -> int:
             allocations[sym] = original * target.allocation_modifier
             logger.info(f"FinScan reduced {sym} allocation: ${original:,.2f} -> ${allocations[sym]:,.2f}")
 
+    # Apply momentum tilt (Task 14)
+    if Config.MOMENTUM_TILT_ENABLED and not prices_df.empty:
+        momentum_pcts = compute_momentum_percentiles(prices_df)
+        if momentum_pcts:
+            allocations = apply_momentum_tilt(allocations, momentum_pcts, Config.MOMENTUM_TILT_FACTOR)
+            logger.info(f"Momentum tilt applied (factor={Config.MOMENTUM_TILT_FACTOR})")
+
     weekly_text = " (WEEKLY - Monday)" if is_weekly else ""
     print(f"\nBuying {len(targets)} stocks (vol-adjusted{weekly_text}):")
     bought_count = 0
@@ -521,6 +625,11 @@ def cmd_execute(force_refresh: bool = False) -> int:
 
         if price <= 0:
             print(f"    Skipping: no price available")
+            continue
+
+        # Intraday momentum check
+        if not _check_intraday_momentum(fmp, symbol):
+            print(f"    Skipping: intraday momentum check failed")
             continue
 
         # Determine order type and place order
@@ -580,6 +689,11 @@ def cmd_execute(force_refresh: bool = False) -> int:
             print(f"    Order FAILED for {symbol}")
 
     print(f"\nBought {bought_count}/{len(targets)} stocks successfully.")
+
+    # Place trailing stops on all positions
+    if Config.TRAILING_STOP_ENABLED:
+        refreshed_status = broker.get_account_status()
+        _place_trailing_stops(broker, prices_df, refreshed_status.positions)
 
     # Send DCA summary notification
     if bought_count > 1 and Config.ENABLE_NOTIFICATIONS and Config.DISCORD_WEBHOOK_URL:

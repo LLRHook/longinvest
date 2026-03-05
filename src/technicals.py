@@ -1,5 +1,6 @@
 import logging
 
+import numpy as np
 import pandas as pd
 
 from config import Config
@@ -133,5 +134,153 @@ def compute_price_momentum_12_1(prices_df: pd.DataFrame) -> dict[str, float]:
 
         if price_12m > 0:
             signals[symbol] = (price_1m / price_12m) - 1
+
+    return signals
+
+
+def compute_momentum_percentiles(prices_df: pd.DataFrame) -> dict[str, float]:
+    """Convert 12-1 momentum signals to percentile ranks across the universe.
+
+    Args:
+        prices_df: DataFrame with Date index, columns = symbols, values = prices.
+
+    Returns:
+        Dict of {symbol: percentile_rank} where rank is 0-100.
+    """
+    raw_signals = compute_price_momentum_12_1(prices_df)
+    if not raw_signals:
+        return {}
+
+    series = pd.Series(raw_signals)
+    # Use pandas rank() with percent=True for percentile ranking (0-1), scale to 0-100
+    ranks = series.rank(pct=True) * 100
+    return ranks.to_dict()
+
+
+def compute_volume_signals(
+    prices_df: pd.DataFrame,
+    volume_df: pd.DataFrame | None = None,
+) -> dict[str, float]:
+    """Compute volume surge ratio for each symbol.
+
+    The surge ratio is the latest volume divided by the VOLUME_SURGE_LOOKBACK-day
+    average volume. A ratio > VOLUME_SURGE_THRESHOLD indicates institutional interest.
+
+    Args:
+        prices_df: DataFrame with Date index, columns = symbols, values = prices.
+            Used only to determine the symbol universe if volume_df is provided.
+        volume_df: DataFrame with Date index, columns = symbols, values = volume.
+            Required for volume signal computation.
+
+    Returns:
+        Dict of {symbol: surge_ratio}.
+    """
+    if volume_df is None or volume_df.empty:
+        return {}
+
+    lookback = Config.VOLUME_SURGE_LOOKBACK
+    signals: dict[str, float] = {}
+
+    for symbol in volume_df.columns:
+        vol = volume_df[symbol].dropna()
+        if len(vol) < lookback + 1:
+            continue
+
+        avg_volume = vol.iloc[-(lookback + 1):-1].mean()
+        if avg_volume < 1e-10:
+            continue
+
+        latest_volume = vol.iloc[-1]
+        signals[symbol] = float(latest_volume / avg_volume)
+
+    return signals
+
+
+def compute_multi_tf_relative_strength(
+    prices_df: pd.DataFrame,
+    benchmark_prices: pd.Series,
+) -> dict[str, float]:
+    """Compute multi-timeframe relative strength vs benchmark.
+
+    For each timeframe in Config.RS_TIMEFRAMES, computes the stock return / benchmark
+    return ratio, then creates a weighted composite score using Config.RS_WEIGHTS.
+    The composite scores are percentile-ranked across the universe.
+
+    Args:
+        prices_df: DataFrame with Date index, columns = symbols, values = prices.
+        benchmark_prices: Series of benchmark (e.g. SPY) close prices with Date index.
+
+    Returns:
+        Dict of {symbol: composite_rs_percentile} where percentile is 0-100.
+    """
+    if prices_df.empty or benchmark_prices.empty:
+        return {}
+
+    timeframes = Config.RS_TIMEFRAMES
+    weights = Config.RS_WEIGHTS
+    composite_scores: dict[str, float] = {}
+
+    for symbol in prices_df.columns:
+        prices = prices_df[symbol].dropna()
+        weighted_sum = 0.0
+        total_weight = 0.0
+
+        for tf, w in zip(timeframes, weights):
+            if len(prices) < tf or len(benchmark_prices) < tf:
+                continue
+
+            stock_return = (prices.iloc[-1] / prices.iloc[-tf]) - 1
+            bench_return = (benchmark_prices.iloc[-1] / benchmark_prices.iloc[-tf]) - 1
+
+            # Relative strength ratio: use difference to avoid division by zero
+            if abs(bench_return) < 1e-10:
+                rs = stock_return
+            else:
+                rs = stock_return / bench_return
+
+            weighted_sum += w * rs
+            total_weight += w
+
+        if total_weight > 0:
+            composite_scores[symbol] = weighted_sum / total_weight
+
+    if not composite_scores:
+        return {}
+
+    # Percentile-rank the composite scores
+    series = pd.Series(composite_scores)
+    ranks = series.rank(pct=True) * 100
+    return ranks.to_dict()
+
+
+def compute_atr(prices_df: pd.DataFrame, period: int = 14) -> dict[str, float]:
+    """Compute Average True Range using close-to-close approximation.
+
+    Since we only have close prices (no high/low), the true range is approximated
+    as the absolute daily change: abs(close[t] - close[t-1]).
+
+    Args:
+        prices_df: DataFrame with Date index, columns = symbols, values = prices.
+        period: ATR lookback period in days.
+
+    Returns:
+        Dict of {symbol: atr_value}.
+    """
+    if prices_df.empty:
+        return {}
+
+    signals: dict[str, float] = {}
+
+    for symbol in prices_df.columns:
+        prices = prices_df[symbol].dropna()
+        if len(prices) < period + 1:
+            continue
+
+        true_range = prices.diff().abs()
+        atr = true_range.rolling(window=period, min_periods=period).mean()
+        last_atr = atr.iloc[-1]
+
+        if not np.isnan(last_atr):
+            signals[symbol] = float(last_atr)
 
     return signals
