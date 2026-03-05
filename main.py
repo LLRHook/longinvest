@@ -79,6 +79,88 @@ def cmd_clear_cache() -> int:
     return 0
 
 
+def cmd_manual_buy() -> int:
+    """Execute a one-time buy using the same allocation ratios from the last dry run.
+
+    Uses inverse-vol weighting for a fixed set of symbols, places market orders,
+    records the deposit, and shows SPY benchmark comparison.
+    """
+    # Allocation ratios from the Mar 5 dry run (inverse-vol weighted + momentum tilt)
+    MANUAL_ALLOCATIONS = {
+        "OLMA": 0.0558,   # 5.58%  (vol 154%)
+        "STOK": 0.1198,   # 11.98% (vol 71%)
+        "MLYS": 0.0769,   # 7.69%  (vol 111%)
+        "CECO": 0.1504,   # 15.04% (vol 56%)
+        "PDO":  0.5961,   # 59.61% (vol 13%)
+    }
+    BUDGET = Config.WEEKLY_INVESTMENT  # $25,000
+
+    print("\n=== Manual Buy (One-Time) ===")
+    print(f"Budget: ${BUDGET:,.2f}")
+
+    broker = AlpacaBroker()
+    fmp = FMPClient()
+
+    # Verify account
+    status = broker.get_account_status()
+    print(f"Cash available: ${status.cash:,.2f}")
+    if status.cash < BUDGET:
+        print(f"Error: Not enough cash (${status.cash:,.2f} < ${BUDGET:,.2f})")
+        return 1
+
+    bought_count = 0
+    for symbol, pct in MANUAL_ALLOCATIONS.items():
+        amount = round(BUDGET * pct, 2)
+        print(f"\n  {symbol}: ${amount:,.2f} ({pct*100:.1f}%)")
+
+        # Get current price for logging
+        quote = fmp.get_quote(symbol)
+        price = quote.get("price", 0) if quote else 0
+
+        # Place market order
+        order_id = None
+        fractionable = broker.is_fractionable(symbol)
+        if fractionable:
+            order_id = broker.buy_notional(symbol, amount)
+        else:
+            if price > 0:
+                whole_qty = int(amount // price)
+                if whole_qty >= 1:
+                    print(f"    Non-fractionable: buying {whole_qty} shares (~${whole_qty * price:,.2f})")
+                    order_id = broker.buy_qty(symbol, whole_qty)
+                else:
+                    print(f"    Skipping: ${amount:,.2f} < 1 share at ${price:.2f}")
+                    continue
+
+        if order_id:
+            print(f"    Order placed: {order_id}")
+            bought_count += 1
+        else:
+            print(f"    Order FAILED")
+
+    print(f"\nBought {bought_count}/{len(MANUAL_ALLOCATIONS)} stocks.")
+
+    # Record deposit and show SPY benchmark
+    if bought_count > 0:
+        spy_quote = fmp.get_quote("SPY")
+        spy_price = spy_quote.get("price", 0) if spy_quote else 0
+        if spy_price > 0:
+            record_deposit(BUDGET, spy_price)
+
+        refreshed = broker.get_account_status()
+        positions_value = sum(p.market_value for p in refreshed.positions)
+        if spy_price > 0:
+            comparison = compute_portfolio_vs_spy(positions_value, spy_price)
+            print(f"\n=== Performance vs SPY ===")
+            print(f"  Total invested: ${comparison['total_invested']:,.2f} ({comparison['num_weeks']} weeks)")
+            print(f"  Portfolio:  ${comparison['portfolio_value']:,.2f} ({comparison['portfolio_return_pct']:+.2f}%)")
+            print(f"  SPY equiv:  ${comparison['spy_value']:,.2f} ({comparison['spy_return_pct']:+.2f}%)")
+            print(f"  Alpha:      {comparison['alpha_pct']:+.2f}%")
+
+    print(f"\nTotal API calls: {fmp.get_api_call_count()}")
+    return 0
+
+
 def cmd_reset() -> int:
     """Wipe Alpaca account clean and clear all local tracking data.
 
@@ -825,6 +907,11 @@ def main() -> int:
         action="store_true",
         help="Wipe account: cancel orders, close positions, clear all tracking data",
     )
+    parser.add_argument(
+        "--manual-buy",
+        action="store_true",
+        help="One-time buy using fixed allocation ratios from last dry run",
+    )
     args = parser.parse_args()
 
     if args.debug:
@@ -840,6 +927,13 @@ def main() -> int:
             print("Error: Alpaca keys required for --reset")
             return 1
         return cmd_reset()
+
+    # Handle manual buy (needs Alpaca + FMP keys)
+    if args.manual_buy:
+        if not Config.ALPACA_API_KEY or not Config.ALPACA_SECRET_KEY or not Config.FMP_API_KEY:
+            print("Error: Alpaca and FMP keys required for --manual-buy")
+            return 1
+        return cmd_manual_buy()
 
     # Validate configuration
     missing = Config.validate()
