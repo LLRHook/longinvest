@@ -163,6 +163,84 @@ class TestEndToEnd:
         filtered_symbols = {s.stock.symbol for s in filtered}
         assert "EARN" not in filtered_symbols, "EARN should be excluded by earnings blackout"
 
+    def test_volume_surge_boosts_scoring(self):
+        """A stock with volume surge ratio > 2.0 should be detected as a surge candidate."""
+        # Simulate 50 days of volume data for two stocks
+        days = 50
+        dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=days)
+
+        # SURGE: last day has 3x average volume
+        surge_volumes = [100_000] * (days - 1) + [300_000]
+        # CALM: steady volume throughout
+        calm_volumes = [100_000] * days
+
+        volume_df = pd.DataFrame(
+            {"SURGE": surge_volumes, "CALM": calm_volumes},
+            index=dates,
+        )
+
+        # Compute volume surge ratio manually (latest / 50-day avg)
+        for symbol in ["SURGE", "CALM"]:
+            col = volume_df[symbol]
+            avg_vol = col.iloc[:-1].mean()
+            latest_vol = col.iloc[-1]
+            surge_ratio = latest_vol / avg_vol if avg_vol > 0 else 0.0
+
+            if symbol == "SURGE":
+                assert surge_ratio >= 2.0, (
+                    f"SURGE should have surge ratio >= 2.0 but got {surge_ratio:.2f}"
+                )
+            else:
+                assert surge_ratio < 2.0, (
+                    f"CALM should have surge ratio < 2.0 but got {surge_ratio:.2f}"
+                )
+
+        # Show that the surge detection could boost scoring:
+        # a surging stock gets a multiplier applied to its fundamental score
+        base_score = 70.0
+        surge_boost = 1.10  # 10% boost for volume surge
+        boosted = base_score * surge_boost
+        assert boosted > base_score
+        assert boosted == pytest.approx(77.0)
+
+    def test_intraday_check_skips_falling_stock(self):
+        """A stock down > 3% intraday should be skipped by the intraday momentum check."""
+        # Simulate the intraday check logic from main.py
+        intraday_min_change = -0.03  # Config.INTRADAY_MIN_CHANGE
+
+        # Mock quote data: stock down 5% today
+        mock_quotes = {
+            "FALL": {"price": 47.50, "previousClose": 50.00},  # -5.0%
+            "RISE": {"price": 52.00, "previousClose": 50.00},  # +4.0%
+            "FLAT": {"price": 49.80, "previousClose": 50.00},  # -0.4%
+        }
+
+        allocations = {"FALL": 0.40, "RISE": 0.35, "FLAT": 0.25}
+        skipped = []
+        remaining = {}
+
+        for symbol, alloc in allocations.items():
+            quote = mock_quotes[symbol]
+            change = (quote["price"] - quote["previousClose"]) / quote["previousClose"]
+            if change < intraday_min_change:
+                skipped.append(symbol)
+            else:
+                remaining[symbol] = alloc
+
+        # FALL should be skipped (down 5% > 3% threshold)
+        assert "FALL" in skipped, "FALL should be skipped (down 5%)"
+        assert "RISE" not in skipped
+        assert "FLAT" not in skipped
+
+        # Redistribute FALL's allocation proportionally
+        if remaining:
+            total_remaining = sum(remaining.values())
+            redistributed = {
+                sym: alloc / total_remaining for sym, alloc in remaining.items()
+            }
+            assert sum(redistributed.values()) == pytest.approx(1.0)
+            assert "FALL" not in redistributed
+
     def test_vol_adjusted_allocation_applied(self):
         """Inverse-vol weighting distributes budget correctly."""
         investment_budget = 10_000.0

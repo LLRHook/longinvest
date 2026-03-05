@@ -56,3 +56,40 @@ def compute_individual_stats(prices_df: pd.DataFrame) -> list[StockStats]:
 
     stats.sort(key=lambda s: s.sharpe_ratio, reverse=True)
     return stats
+
+
+def apply_momentum_tilt(
+    allocations: dict[str, float],
+    momentum_scores: dict[str, float],
+    tilt_factor: float,
+) -> dict[str, float]:
+    """Tilt allocations toward momentum leaders.
+
+    Args:
+        allocations: Base allocations {symbol: dollar_amount}.
+        momentum_scores: Momentum percentile scores {symbol: 0-100}.
+        tilt_factor: How much to tilt (e.g. 0.20 = 20%).
+
+    Returns:
+        Adjusted allocations that preserve the original total budget.
+    """
+    if not allocations or not momentum_scores:
+        return dict(allocations)
+
+    original_total = sum(allocations.values())
+    if original_total <= 0:
+        return dict(allocations)
+
+    adjusted = {}
+    for sym, amount in allocations.items():
+        pctl = momentum_scores.get(sym, 50.0)
+        factor = 1.0 + tilt_factor * (pctl / 100.0 - 0.5)
+        adjusted[sym] = amount * factor
+
+    # Re-normalize to preserve total budget
+    adjusted_total = sum(adjusted.values())
+    if adjusted_total > 0:
+        scale = original_total / adjusted_total
+        adjusted = {sym: amt * scale for sym, amt in adjusted.items()}
+
+    return adjusted

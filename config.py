@@ -74,6 +74,31 @@ class Config:
     FINSCAN_ELEVATED_RISK_THRESHOLD: int = 50
     FINSCAN_MIN_PIOTROSKI: int = 4
 
+    # --- Multi-Timeframe Relative Strength (Task 9) ---
+    RS_TIMEFRAMES: list = [63, 126, 252]             # 3mo, 6mo, 12mo lookback days
+    RS_WEIGHTS: list = [0.25, 0.35, 0.40]            # Weight per timeframe
+
+    # --- Volume Signals (Task 4) ---
+    VOLUME_SURGE_THRESHOLD: float = 2.0              # 2x avg volume = surge
+    VOLUME_SURGE_LOOKBACK: int = 20                  # 20-day avg volume baseline
+
+    # --- Trailing Stops (Phase 3c / Task 5) ---
+    TRAILING_STOP_ENABLED: bool = True
+    TRAILING_STOP_ATR_MULTIPLIER: float = 2.5        # Stop distance = ATR * multiplier
+    TRAILING_STOP_ATR_PERIOD: int = 14               # ATR lookback
+    TRAILING_STOP_TIGHT_MULTIPLIER: float = 1.5      # Tighter stop after profit target
+    TRAILING_STOP_PROFIT_THRESHOLD: float = 0.15     # 15% gain triggers tightening
+    TRAILING_STOP_MIN_PCT: float = 0.03              # Floor: never tighter than 3%
+    TRAILING_STOP_MAX_PCT: float = 0.15              # Ceiling: never wider than 15%
+
+    # --- Intraday Momentum Check (Task 6) ---
+    INTRADAY_CHECK_ENABLED: bool = True
+    INTRADAY_MIN_CHANGE: float = -0.03               # Skip buy if stock down >3% intraday
+
+    # --- Momentum Tilt (Task 14) ---
+    MOMENTUM_TILT_ENABLED: bool = True
+    MOMENTUM_TILT_FACTOR: float = 0.20               # 20% tilt toward momentum leaders
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return list of missing required config values."""

@@ -606,21 +606,21 @@ Standalone:
 5. Task 2: Loosen guardrails
 6. Task 3: Reweight scoring
 7. Task 1: Parallelize FMP calls
-8. Task 5: Tiered trailing stops
+8. Task 5: Tiered trailing stops (IN PROGRESS)
 
 **Phase 3 — Execution intelligence:**
-9. Task 6: Intraday check
+9. Task 6: Intraday check (IN PROGRESS)
 10. Task 12: Circuit breaker
 11. Task 17: Rebalancing
 12. Task 11: Earnings calendar
 
 **Phase 4 — Advanced momentum:**
-13. Task 4: Momentum/volume technicals
-14. Task 9: Relative strength
-15. Task 14: Optimizer momentum tilt
+13. Task 4: Momentum/volume technicals (IN PROGRESS)
+14. Task 9: Relative strength (IN PROGRESS)
+15. Task 14: Optimizer momentum tilt (IN PROGRESS)
 
 **Phase 5 — Polish:**
-16. Task 10: Batch FMP endpoints
+16. Task 10: Batch FMP endpoints (IN PROGRESS)
 17. Task 13: GitHub Actions DST/holidays
 18. Task 18: Expanded Discord alerts
 
