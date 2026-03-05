@@ -4,6 +4,7 @@ import logging
 import sys
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 
@@ -122,9 +123,10 @@ def cmd_reset() -> int:
     # 4. Clear deposit history
     print("\n[4/5] Clearing deposit history...")
     from src.deposits import DEPOSITS_FILE
-    if os.path.exists(DEPOSITS_FILE):
-        os.remove(DEPOSITS_FILE)
-        print(f"  Deleted {DEPOSITS_FILE}")
+    deposits_path = Path(DEPOSITS_FILE)
+    if deposits_path.exists():
+        deposits_path.unlink()
+        print(f"  Deleted {deposits_path}")
     else:
         print("  No deposit history file found.")
 
