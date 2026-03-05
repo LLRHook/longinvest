@@ -18,6 +18,7 @@ on:
           - execute
           - status
           - reset
+          - manual-buy
 env:
   ALPACA_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
   ALPACA_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
@@ -112,4 +113,8 @@ jobs:
       - name: Reset account (wipe clean)
         if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'reset'
         run: python main.py --reset
+
+      - name: Manual buy (one-time)
+        if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'manual-buy'
+        run: python main.py --manual-buy
 
