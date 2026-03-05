@@ -9,7 +9,6 @@ import pytest
 
 from src.broker import Position
 from src.data import StockData
-from src.finscan import FinScanResult
 
 
 # ---------------------------------------------------------------------------
@@ -70,22 +69,6 @@ def make_position(**overrides) -> Position:
     )
     defaults.update(overrides)
     return Position(**defaults)
-
-
-def make_finscan_result(**overrides) -> FinScanResult:
-    """Create a FinScanResult with LOW risk defaults."""
-    defaults = dict(
-        ticker="TEST",
-        composite_score=25,
-        risk_rating="LOW",
-        piotroski_score=7,
-        piotroski_signal="STRONG",
-        beneish_signal="UNLIKELY_MANIPULATOR",
-        altman_zone="SAFE",
-        red_flags=[],
-    )
-    defaults.update(overrides)
-    return FinScanResult(**defaults)
 
 
 def make_prices_df(
@@ -219,7 +202,6 @@ def config_defaults(monkeypatch):
     monkeypatch.setattr(Config, "ALPACA_API_KEY", "test-key")
     monkeypatch.setattr(Config, "ALPACA_SECRET_KEY", "test-secret")
     monkeypatch.setattr(Config, "FMP_API_KEY", "test-fmp-key")
-    monkeypatch.setattr(Config, "FINSCAN_API_KEY", "test-finscan-key")
     monkeypatch.setattr(Config, "ENABLE_NOTIFICATIONS", False)
     monkeypatch.setattr(Config, "DISCORD_WEBHOOK_URL", "")
     monkeypatch.setattr(Config, "ALPACA_PAPER", True)

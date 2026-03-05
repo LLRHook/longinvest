@@ -9,9 +9,8 @@ import pytest
 
 from config import Config
 from src.data import StockData
-from src.finscan import FinScanClient, FinScanResult
 from src.strategy import MultiFactorStrategy, ScoredStock, score_universe
-from tests.conftest import make_finscan_result, make_position, make_stock
+from tests.conftest import make_position, make_stock
 
 
 class TestEndToEnd:
@@ -58,43 +57,8 @@ class TestEndToEnd:
         beat_scored = next(s for s in scored if s.stock.symbol == "BEAT")
         assert any("earnings beat" in r.lower() for r in beat_scored.reasons)
 
-    def test_finscan_gating_in_pipeline(self):
-        """RISK and MANI should be rejected by FinScan; ELEV gets 50% modifier."""
-        self.config_defaults(DCA_TOP_N=10)
-        fmp = MagicMock()
-        strategy = MultiFactorStrategy(fmp)
-        passing = self._all_passing()
-        scored = score_universe(passing)
-        strategy.get_buy_recommendations = MagicMock(return_value=scored)
-
-        finscan = MagicMock()
-
-        def scan_side_effect(ticker):
-            if ticker == "RISK":
-                return make_finscan_result(ticker="RISK", composite_score=80, risk_rating="HIGH")
-            elif ticker == "MANI":
-                return make_finscan_result(ticker="MANI", beneish_signal="LIKELY_MANIPULATOR")
-            elif ticker == "ELEV":
-                return make_finscan_result(ticker="ELEV", composite_score=55, risk_rating="ELEVATED")
-            else:
-                return make_finscan_result(ticker=ticker)
-
-        finscan.scan.side_effect = scan_side_effect
-
-        targets = strategy.get_dca_buy_targets(
-            positions=[], portfolio_value=100_000.0, finscan=finscan,
-        )
-        target_symbols = {t.stock.symbol for t in targets}
-
-        assert "RISK" not in target_symbols, "RISK should be rejected by FinScan"
-        assert "MANI" not in target_symbols, "MANI should be rejected by FinScan"
-
-        elev_target = next((t for t in targets if t.stock.symbol == "ELEV"), None)
-        if elev_target:
-            assert elev_target.allocation_modifier == 0.5
-
     def test_full_pipeline_selects_correct_stocks(self):
-        """Final buy list should include top scorers, exclude guardrail failures and FinScan rejects."""
+        """Final buy list should include top scorers, exclude guardrail failures."""
         self.config_defaults(DCA_TOP_N=10)
         fmp = MagicMock()
         strategy = MultiFactorStrategy(fmp)
@@ -102,20 +66,8 @@ class TestEndToEnd:
         scored = score_universe(passing)
         strategy.get_buy_recommendations = MagicMock(return_value=scored)
 
-        finscan = MagicMock()
-
-        def scan_side_effect(ticker):
-            if ticker == "RISK":
-                return make_finscan_result(ticker="RISK", composite_score=80, risk_rating="HIGH")
-            elif ticker == "MANI":
-                return make_finscan_result(ticker="MANI", beneish_signal="LIKELY_MANIPULATOR")
-            else:
-                return make_finscan_result(ticker=ticker)
-
-        finscan.scan.side_effect = scan_side_effect
-
         targets = strategy.get_dca_buy_targets(
-            positions=[], portfolio_value=100_000.0, finscan=finscan,
+            positions=[], portfolio_value=100_000.0,
         )
         target_symbols = {t.stock.symbol for t in targets}
 
@@ -123,10 +75,6 @@ class TestEndToEnd:
         assert "JUNK" not in target_symbols
         assert "TINY" not in target_symbols
         assert "ILIQ" not in target_symbols
-
-        # FinScan rejects
-        assert "RISK" not in target_symbols
-        assert "MANI" not in target_symbols
 
         # Top scorers should be selected (GROW at minimum)
         assert "GROW" in target_symbols, f"GROW should be selected but targets are: {target_symbols}"

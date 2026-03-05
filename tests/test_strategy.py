@@ -6,9 +6,8 @@ import pytest
 
 from config import Config
 from src.data import StockData
-from src.finscan import FinScanResult
 from src.strategy import MultiFactorStrategy, ScoredStock, score_universe
-from tests.conftest import make_finscan_result, make_position, make_stock
+from tests.conftest import make_position, make_stock
 
 
 # ===================================================================
@@ -248,40 +247,3 @@ class TestGetDcaBuyTargets:
         assert "NEW_HIGH" in target_symbols
         assert "NEW_LOW" not in target_symbols
 
-    def test_finscan_high_rejected(self, monkeypatch):
-        monkeypatch.setattr(Config, "DCA_TOP_N", 3)
-        scored = self._make_scored_list(3)
-        self.strategy.get_buy_recommendations = MagicMock(return_value=scored)
-
-        finscan = MagicMock()
-        # First candidate is HIGH risk
-        finscan.scan.side_effect = [
-            make_finscan_result(ticker="S0", composite_score=80, risk_rating="HIGH"),
-            make_finscan_result(ticker="S1", composite_score=20, risk_rating="LOW"),
-            make_finscan_result(ticker="S2", composite_score=20, risk_rating="LOW"),
-        ]
-
-        targets = self.strategy.get_dca_buy_targets(
-            positions=[], portfolio_value=100_000.0, finscan=finscan,
-        )
-        target_symbols = [t.stock.symbol for t in targets]
-        assert "S0" not in target_symbols
-
-    def test_finscan_elevated_gets_modifier(self, monkeypatch):
-        monkeypatch.setattr(Config, "DCA_TOP_N", 3)
-        scored = self._make_scored_list(3)
-        self.strategy.get_buy_recommendations = MagicMock(return_value=scored)
-
-        finscan = MagicMock()
-        finscan.scan.side_effect = [
-            make_finscan_result(ticker="S0", composite_score=55, risk_rating="ELEVATED"),
-            make_finscan_result(ticker="S1", composite_score=20, risk_rating="LOW"),
-            make_finscan_result(ticker="S2", composite_score=20, risk_rating="LOW"),
-        ]
-
-        targets = self.strategy.get_dca_buy_targets(
-            positions=[], portfolio_value=100_000.0, finscan=finscan,
-        )
-        s0_target = next((t for t in targets if t.stock.symbol == "S0"), None)
-        assert s0_target is not None
-        assert s0_target.allocation_modifier == 0.5
