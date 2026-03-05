@@ -1,8 +1,10 @@
-name: Portfolio Reporter
+name: Trading Bot
 
 on:
   schedule:
-    - cron: '30 21 * * 1-5'  # Daily report (~4:30 PM ET)
+    - cron: '30 14 * * 1'    # Market open execute Monday morning (~9:30 AM ET) - WEEKLY
+    - cron: '30 21 * * 1-5'  # Daily report (~4:30 PM ET) - keeps daily for portfolio tracking
+    - cron: '0 18 * * 1'     # Monday FinScan monitor (~1:00 PM ET)
 
   workflow_dispatch:
     inputs:
@@ -13,13 +15,14 @@ on:
         type: choice
         options:
           - report
-          - status
           - dry-run
+          - execute
+          - status
           - monitor
 
 env:
-  ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-  ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+  ALPACA_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+  ALPACA_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
   FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
   DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
   FINSCAN_API_KEY: ${{ secrets.FINSCAN_API_KEY }}
@@ -66,12 +69,34 @@ jobs:
         if: steps.market-check.outputs.skip != 'true'
         id: determine-action
         run: |
+          # If manually triggered, use the input
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "action=${{ inputs.action }}" >> $GITHUB_OUTPUT
             echo "Manual trigger: ${{ inputs.action }}"
-          else
+            exit 0
+          fi
+
+          # Compute current ET hour to handle DST correctly.
+          # Both summer and winter crons fire year-round, so we use the
+          # actual ET hour to decide the action and skip duplicates.
+          ET_HOUR=$(TZ=America/New_York date +%H)
+          UTC_HOUR=$(date -u +%H)
+          echo "Current UTC hour: $UTC_HOUR, ET hour: $ET_HOUR"
+
+          # 9 AM ET  = market open  → execute trades
+          # 4-5 PM ET = market close → daily report (5 PM in summer due to fixed UTC cron)
+          if [ "$ET_HOUR" -eq 9 ] || [ "$ET_HOUR" -eq 10 ]; then
+            echo "action=execute" >> $GITHUB_OUTPUT
+            echo "Scheduled: Market open - running execute"
+          elif [ "$ET_HOUR" -eq 16 ] || [ "$ET_HOUR" -eq 17 ]; then
             echo "action=report" >> $GITHUB_OUTPUT
-            echo "Scheduled: sending daily report"
+            echo "Scheduled: Market close - sending daily report"
+          elif [ "$(date -u +%u)" -eq 1 ] && ([ "$ET_HOUR" -eq 13 ] || [ "$ET_HOUR" -eq 14 ]); then
+            echo "action=monitor" >> $GITHUB_OUTPUT
+            echo "Scheduled: Monday - FinScan portfolio monitor"
+          else
+            echo "Scheduled: ET hour $ET_HOUR does not match any action window — skipping"
+            echo "action=skip" >> $GITHUB_OUTPUT
           fi
 
       - name: Run status check
@@ -81,6 +106,10 @@ jobs:
       - name: Dry run (no trades)
         if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'dry-run'
         run: python main.py --dry-run
+
+      - name: Execute trades (LIVE)
+        if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'execute'
+        run: python main.py
 
       - name: Send daily report
         if: steps.market-check.outputs.skip != 'true' && steps.determine-action.outputs.action == 'report'
