@@ -9,6 +9,7 @@ import pandas as pd
 
 from config import Config
 from src.broker import AlpacaBroker
+from src.deposits import compute_portfolio_vs_spy, get_total_invested, record_deposit
 from src.cache import (
     CacheManager,
     dataframe_to_dict,
@@ -468,6 +469,19 @@ def cmd_dry_run(force_refresh: bool = False) -> int:
                     tight_str = " (tightened)" if multiplier == Config.TRAILING_STOP_TIGHT_MULTIPLIER else ""
                     print(f"  {pos.symbol}: {trail_pct*100:.1f}% trail{tight_str}")
 
+    # Show cumulative performance vs SPY (from deposit history)
+    spy_quote_now = fmp.get_quote("SPY")
+    spy_price_now = spy_quote_now.get("price", 0) if spy_quote_now else 0
+    positions_value = sum(p.market_value for p in status.positions)
+    if spy_price_now > 0 and positions_value > 0:
+        comparison = compute_portfolio_vs_spy(positions_value, spy_price_now)
+        if comparison["total_invested"] > 0:
+            print(f"\n=== Performance vs SPY ===")
+            print(f"  Total invested: ${comparison['total_invested']:,.2f} ({comparison['num_weeks']} weeks)")
+            print(f"  Portfolio:  ${comparison['portfolio_value']:,.2f} ({comparison['portfolio_return_pct']:+.2f}%)")
+            print(f"  SPY equiv:  ${comparison['spy_value']:,.2f} ({comparison['spy_return_pct']:+.2f}%)")
+            print(f"  Alpha:      {comparison['alpha_pct']:+.2f}%")
+
     print(f"\nTotal API calls: {fmp.get_api_call_count()}")
     print("\n[DRY RUN - No trades executed]")
     return 0
@@ -651,6 +665,24 @@ def cmd_execute(force_refresh: bool = False) -> int:
             print(f"    Order FAILED for {symbol}")
 
     print(f"\nBought {bought_count}/{len(targets)} stocks successfully.")
+
+    # Record this week's deposit and SPY benchmark
+    if bought_count > 0:
+        spy_quote_now = fmp.get_quote("SPY")
+        spy_price_now = spy_quote_now.get("price", 0) if spy_quote_now else 0
+        if spy_price_now > 0:
+            record_deposit(investment_budget, spy_price_now)
+
+        # Show cumulative performance vs SPY
+        refreshed = broker.get_account_status()
+        positions_value = sum(p.market_value for p in refreshed.positions)
+        if spy_price_now > 0:
+            comparison = compute_portfolio_vs_spy(positions_value, spy_price_now)
+            print(f"\n=== Performance vs SPY ===")
+            print(f"  Total invested: ${comparison['total_invested']:,.2f} ({comparison['num_weeks']} weeks)")
+            print(f"  Portfolio:  ${comparison['portfolio_value']:,.2f} ({comparison['portfolio_return_pct']:+.2f}%)")
+            print(f"  SPY equiv:  ${comparison['spy_value']:,.2f} ({comparison['spy_return_pct']:+.2f}%)")
+            print(f"  Alpha:      {comparison['alpha_pct']:+.2f}%")
 
     # Place trailing stops on all positions
     if Config.TRAILING_STOP_ENABLED:
