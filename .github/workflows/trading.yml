@@ -1,9 +1,10 @@
 name: Trading Bot
 
 on:
-  schedule:
-    - cron: '30 14 * * 1'    # Market open execute Monday morning (~9:30 AM ET) - WEEKLY
-    - cron: '30 21 * * 1-5'  # Daily report (~4:30 PM ET) - keeps daily for portfolio tracking
+  # All scheduled cron jobs disabled — project concluded.
+  # schedule:
+  #   - cron: '30 14 * * 1'    # Market open execute Monday morning (~9:30 AM ET) - WEEKLY
+  #   - cron: '30 21 * * 1-5'  # Daily report (~4:30 PM ET) - keeps daily for portfolio tracking
 
   workflow_dispatch:
     inputs:
