@@ -105,21 +105,6 @@ class TestVolAdjustedAllocation:
         # C should get same weight as the stock with median vol
         assert raw_weights["C"] == raw_weights["B"]
 
-    def test_finscan_modifier_applied(self, config_defaults):
-        """ELEVATED risk applies 50% allocation modifier."""
-        investment_budget = 10_000.0
-        vols = {"A": 0.30, "B": 0.30}
-
-        raw_weights = {sym: 1.0 / v for sym, v in vols.items()}
-        total_weight = sum(raw_weights.values())
-        allocations = {sym: (w / total_weight) * investment_budget for sym, w in raw_weights.items()}
-
-        # Apply ELEVATED modifier to A
-        allocations["A"] *= 0.5
-
-        assert allocations["A"] == pytest.approx(2500.0)
-        assert allocations["B"] == pytest.approx(5000.0)
-
 
 # ===================================================================
 # TestLimitOrderLogic

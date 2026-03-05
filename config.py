@@ -67,13 +67,6 @@ class Config:
     CACHE_DIR: str = "cache"
     CACHE_TTL_HOURS: int = 24  # 1 day TTL for all cached data
 
-    # FinScan
-    FINSCAN_API_KEY: str = os.getenv("FINSCAN_API_KEY", "")
-    FINSCAN_BASE_URL: str = os.getenv("FINSCAN_BASE_URL", "https://finscan.io")
-    FINSCAN_HIGH_RISK_THRESHOLD: int = 70
-    FINSCAN_ELEVATED_RISK_THRESHOLD: int = 50
-    FINSCAN_MIN_PIOTROSKI: int = 4
-
     # --- Multi-Timeframe Relative Strength (Task 9) ---
     RS_TIMEFRAMES: list = [63, 126, 252]             # 3mo, 6mo, 12mo lookback days
     RS_WEIGHTS: list = [0.25, 0.35, 0.40]            # Weight per timeframe

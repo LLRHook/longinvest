@@ -6,8 +6,6 @@ from src.notifier import (
     format_circuit_breaker_embed,
     format_dca_buy_embed,
     format_dca_summary_embed,
-    format_finscan_alert_embed,
-    format_finscan_reject_embed,
     format_performance_embed,
     format_screening_embed,
     format_sell_embed,
@@ -165,30 +163,3 @@ class TestFormatSellEmbed:
         assert embed["color"] == 0xFF4444  # Red for fundamental
 
 
-# ===================================================================
-# TestFormatFinscanRejectEmbed
-# ===================================================================
-
-
-class TestFormatFinscanRejectEmbed:
-    def test_structure(self):
-        embed = format_finscan_reject_embed("RISK", "HIGH composite risk", 80, "HIGH")
-        _assert_embed_structure(embed)
-        assert "RISK" in embed["title"]
-        assert embed["color"] == 0xFF4444
-
-
-# ===================================================================
-# TestFormatFinscanAlertEmbed
-# ===================================================================
-
-
-class TestFormatFinscanAlertEmbed:
-    def test_elevated_color(self):
-        embed = format_finscan_alert_embed("ELEV", 55, "ELEVATED", [])
-        assert embed["color"] == 0xFF8C00
-
-    def test_high_color(self):
-        embed = format_finscan_alert_embed("RISK", 80, "HIGH", [{"severity": "HIGH", "message": "Bad debt"}])
-        assert embed["color"] == 0xFF0000
-        assert "Bad debt" in embed["description"]
